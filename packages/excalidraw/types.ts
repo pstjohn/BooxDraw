@@ -112,9 +112,9 @@ export type DataURL = string & { _brand: "DataURL" };
 
 export type BinaryFileData = {
   mimeType:
-    | ValueOf<typeof IMAGE_MIME_TYPES>
-    // future user or unknown file type
-    | typeof MIME_TYPES.binary;
+  | ValueOf<typeof IMAGE_MIME_TYPES>
+  // future user or unknown file type
+  | typeof MIME_TYPES.binary;
   id: FileId;
   dataURL: DataURL;
   /**
@@ -162,13 +162,13 @@ export type ElementOrToolType = ExcalidrawElementType | ToolType | "custom";
 
 export type ActiveTool =
   | {
-      type: ToolType;
-      customType: null;
-    }
+    type: ToolType;
+    customType: null;
+  }
   | {
-      type: "custom";
-      customType: string;
-    };
+    type: "custom";
+    customType: string;
+  };
 
 export type SidebarName = string;
 export type SidebarTabName = string;
@@ -385,24 +385,24 @@ export interface AppState {
   zoom: Zoom;
   openMenu: "canvas" | null;
   openPopup:
-    | "canvasBackground"
-    | "elementBackground"
-    | "elementStroke"
-    | "fontFamily"
-    | "compactTextProperties"
-    | "compactStrokeStyles"
-    | "compactOtherProperties"
-    | "compactArrowProperties"
-    | null;
+  | "canvasBackground"
+  | "elementBackground"
+  | "elementStroke"
+  | "fontFamily"
+  | "compactTextProperties"
+  | "compactStrokeStyles"
+  | "compactOtherProperties"
+  | "compactArrowProperties"
+  | null;
   openSidebar: { name: SidebarName; tab?: SidebarTabName } | null;
   openDialog:
-    | null
-    | { name: "imageExport" | "help" | "jsonExport" }
-    | { name: "ttd"; tab: "text-to-diagram" | "mermaid" }
-    | { name: "commandPalette" }
-    | { name: "settings" }
-    | { name: "elementLinkSelector"; sourceElementId: ExcalidrawElement["id"] }
-    | { name: "charts"; data: Spreadsheet; rawText: string };
+  | null
+  | { name: "imageExport" | "help" | "jsonExport" }
+  | { name: "ttd"; tab: "text-to-diagram" | "mermaid" }
+  | { name: "commandPalette" }
+  | { name: "settings" }
+  | { name: "elementLinkSelector"; sourceElementId: ExcalidrawElement["id"] }
+  | { name: "charts"; data: Spreadsheet; rawText: string };
   /**
    * Reflects user preference for whether the default sidebar should be docked.
    *
@@ -482,6 +482,7 @@ export interface AppState {
   // a drag operation (like pointer position vs bindable element) but needed
   // globally for calculating the binding strategy
   bindMode: BindMode;
+  showToolSettings: boolean;
 }
 
 export type SearchMatch = {
@@ -543,8 +544,8 @@ export type LibraryItems_anyVersion = LibraryItems | LibraryItems_v1;
 
 export type LibraryItemsSource =
   | ((
-      currentLibraryItems: LibraryItems,
-    ) => MaybePromise<LibraryItems_anyVersion | Blob>)
+    currentLibraryItems: LibraryItems,
+  ) => MaybePromise<LibraryItems_anyVersion | Blob>)
   | MaybePromise<LibraryItems_anyVersion | Blob>;
 // -----------------------------------------------------------------------------
 
@@ -578,8 +579,8 @@ export interface ExcalidrawProps {
    */
   onIncrement?: (event: DurableIncrement | EphemeralIncrement) => void;
   initialData?:
-    | (() => MaybePromise<ExcalidrawInitialDataState | null>)
-    | MaybePromise<ExcalidrawInitialDataState | null>;
+  | (() => MaybePromise<ExcalidrawInitialDataState | null>)
+  | MaybePromise<ExcalidrawInitialDataState | null>;
   /**
    * Invoked as soon as the Excalidraw API is available
    * NOTE editor is not yet mounted, and state is not yet initialized
@@ -669,11 +670,11 @@ export interface ExcalidrawProps {
   onUserFollow?: (payload: OnUserFollowedPayload) => void;
   children?: React.ReactNode;
   validateEmbeddable?:
-    | boolean
-    | string[]
-    | RegExp
-    | RegExp[]
-    | ((link: string) => boolean | undefined);
+  | boolean
+  | string[]
+  | RegExp
+  | RegExp[]
+  | ((link: string) => boolean | undefined);
   renderEmbeddable?: (
     element: NonDeleted<ExcalidrawEmbeddableElement>,
     appState: AppState,
