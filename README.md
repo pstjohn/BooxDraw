@@ -1,5 +1,7 @@
 # BooxDraw
 
+![BooxDraw logo](public/booxdraw.png)
+
 BooxDraw is a fork of AndroidDraw/Excalidraw optimized for Boox and other e-ink Android tablets. It keeps Excalidraw's collaborative whiteboard model, but changes the Android wrapper and mobile UI so stylus drawing feels usable on low-refresh e-ink screens.
 
 The main goal is simple: draw with the Boox stylus using the device's native low-latency ink path, then convert those strokes into real Excalidraw elements that sync to a desktop browser through Excalidraw's live collaboration rooms.
