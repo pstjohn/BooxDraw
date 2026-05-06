@@ -56,6 +56,7 @@ type ToolButtonProps =
   | (ToolButtonBaseProps & {
       type: "radio";
       checked: boolean;
+      onClick?(): void;
       onChange?(data: { pointerType: PointerType | null }): void;
       onPointerDown?(data: { pointerType: PointerType }): void;
     });
@@ -174,6 +175,9 @@ export const ToolButton = React.forwardRef(
         onPointerDown={(event) => {
           lastPointerTypeRef.current = event.pointerType || null;
           props.onPointerDown?.({ pointerType: event.pointerType || null });
+        }}
+        onClick={() => {
+          props.onClick?.();
         }}
         onPointerUp={() => {
           requestAnimationFrame(() => {

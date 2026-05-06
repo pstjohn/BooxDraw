@@ -19,12 +19,19 @@ import { KEYS, getFrame } from "@excalidraw/common";
 import { useEffect, useRef, useState } from "react";
 
 import { atom, useAtom, useAtomValue } from "../app-jotai";
-import { activeRoomLinkAtom } from "../collab/Collab";
+import { activeRoomCodeAtom, activeRoomLinkAtom } from "../collab/Collab";
+import {
+  deriveCollaborationLinkDataFromRoomCode,
+  formatRoomCode,
+  generateRoomCode,
+  getRoomCodeDate,
+} from "../data/roomCode";
 
 import "./ShareDialog.scss";
 import { QRCode } from "./QRCode";
 
 import type { CollabAPI } from "../collab/Collab";
+import type { RoomCodeInfo } from "../data/roomCode";
 
 type OnExportToBackend = () => void;
 type ShareDialogType = "share" | "collaborationOnly";
@@ -57,10 +64,12 @@ export type ShareDialogProps = {
 const ActiveRoomDialog = ({
   collabAPI,
   activeRoomLink,
+  activeRoomCode,
   handleClose,
 }: {
   collabAPI: CollabAPI;
   activeRoomLink: string;
+  activeRoomCode: RoomCodeInfo | null;
   handleClose: () => void;
 }) => {
   const { t } = useI18n();
@@ -144,6 +153,20 @@ const ActiveRoomDialog = ({
         />
       </div>
       <QRCode value={activeRoomLink} />
+      {activeRoomCode && (
+        <div className="ShareDialog__active__roomCode">
+          <div className="ShareDialog__active__roomCode__label">
+            Desktop code
+          </div>
+          <div className="ShareDialog__active__roomCode__value">
+            {formatRoomCode(activeRoomCode.code)}
+          </div>
+          <div className="ShareDialog__active__roomCode__hint">
+            Open pstjohn.github.io/BooxDraw and enter this code for{" "}
+            {activeRoomCode.date}.
+          </div>
+        </div>
+      )}
       <div className="ShareDialog__active__description">
         <p>
           <span
@@ -183,6 +206,27 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
 
   const { collabAPI } = props;
 
+  const startCodedRoom = async () => {
+    if (!collabAPI) {
+      return;
+    }
+
+    const roomCode = {
+      code: generateRoomCode(),
+      date: getRoomCodeDate(),
+    };
+    const roomLinkData = await deriveCollaborationLinkDataFromRoomCode(
+      roomCode.code,
+      roomCode.date,
+    );
+
+    trackEvent("share", "room code creation", `ui (${getFrame()})`);
+    collabAPI.startCollaboration(roomLinkData, {
+      isNewRoom: true,
+      roomCode,
+    });
+  };
+
   const startCollabJSX = collabAPI ? (
     <>
       <div className="ShareDialog__picker__header">
@@ -203,6 +247,15 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
             trackEvent("share", "room creation", `ui (${getFrame()})`);
             collabAPI.startCollaboration(null);
           }}
+        />
+      </div>
+      <div className="ShareDialog__picker__button">
+        <FilledButton
+          size="large"
+          variant="outlined"
+          label="Start with desktop code"
+          icon={LinkIcon}
+          onClick={startCodedRoom}
         />
       </div>
 
@@ -246,6 +299,7 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
 
 const ShareDialogInner = (props: ShareDialogProps) => {
   const activeRoomLink = useAtomValue(activeRoomLinkAtom);
+  const activeRoomCode = useAtomValue(activeRoomCodeAtom);
 
   return (
     <Dialog size="small" onCloseRequest={props.handleClose} title={false}>
@@ -254,6 +308,7 @@ const ShareDialogInner = (props: ShareDialogProps) => {
           <ActiveRoomDialog
             collabAPI={props.collabAPI}
             activeRoomLink={activeRoomLink}
+            activeRoomCode={activeRoomCode}
             handleClose={props.handleClose}
           />
         ) : (

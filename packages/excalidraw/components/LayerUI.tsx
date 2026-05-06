@@ -60,8 +60,6 @@ import { Island } from "./Island";
 import { JSONExportDialog } from "./JSONExportDialog";
 import { LaserPointerButton } from "./LaserPointerButton";
 import { Toast } from "./Toast";
-import { ToolButton } from "./ToolButton";
-import { CircleIcon, CloseIcon } from "./icons";
 
 import "./LayerUI.scss";
 import "./Toolbar.scss";
@@ -378,6 +376,10 @@ const LayerUI = ({
       appState,
       elements,
     );
+    const hasSelectedElements =
+      Object.keys(appState.selectedElementIds).length > 0;
+    const shouldShowSelectedShapeActions =
+      appState.showToolSettings || hasSelectedElements;
 
     const shouldShowStats =
       appState.stats.open &&
@@ -399,24 +401,12 @@ const LayerUI = ({
                   isCompactStylesPanel,
               })}
             >
-              {appState.showToolSettings && shouldRenderSelectedShapeActions && (
-                <div style={{ position: "relative", zIndex: 100 }}>
-                  <ToolButton
-                    type="button"
-                    icon={CloseIcon}
-                    title={t("buttons.close") || "Close"}
-                    aria-label={t("buttons.close") || "Close"}
-                    onClick={() => setAppState({ showToolSettings: false })}
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      right: 0,
-                      zIndex: 1,
-                    }}
-                  />
-                  {renderSelectedShapeActions()}
-                </div>
-              )}
+              {shouldShowSelectedShapeActions &&
+                shouldRenderSelectedShapeActions && (
+                  <div style={{ position: "relative", zIndex: 100 }}>
+                    {renderSelectedShapeActions()}
+                  </div>
+                )}
             </div>
           </Stack.Col>
           <div
@@ -428,16 +418,6 @@ const LayerUI = ({
               },
             )}
           >
-            <div style={{ marginRight: 8 }}>
-              <ToolButton
-                type="button"
-                icon={CircleIcon}
-                title={appState.showToolSettings ? "Hide tool settings" : "Show tool settings"}
-                aria-label={appState.showToolSettings ? "Hide tool settings" : "Show tool settings"}
-                onClick={() => setAppState({ showToolSettings: !appState.showToolSettings })}
-                selected={appState.showToolSettings}
-              />
-            </div>
             {appState.collaborators.size > 0 && (
               <UserList
                 collaborators={appState.collaborators}

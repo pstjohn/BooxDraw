@@ -14,8 +14,6 @@ import { FixedSideContainer } from "./FixedSideContainer";
 import { Island } from "./Island";
 
 import { PenModeButton } from "./PenModeButton";
-import { ToolButton } from "./ToolButton";
-import { CircleIcon } from "./icons";
 
 import type { ActionManager } from "../actions/manager";
 import type {
@@ -86,14 +84,6 @@ export const MobileMenu = ({
                 isMobile
                 penDetected={appState.penDetected}
               />
-              <ToolButton
-                type="button"
-                icon={CircleIcon}
-                title={appState.showToolSettings ? "Hide tool settings" : "Show tool settings"}
-                aria-label={appState.showToolSettings ? "Hide tool settings" : "Show tool settings"}
-                onClick={() => setAppState({ showToolSettings: !appState.showToolSettings })}
-                selected={appState.showToolSettings}
-              />
               <DefaultSidebarTriggerTunnel.Out />
             </>
           ))}
@@ -135,6 +125,9 @@ export const MobileMenu = ({
     );
   };
 
+  const hasSelectedElements = Object.keys(appState.selectedElementIds).length > 0;
+  const shouldShowShapeActions = appState.showToolSettings || hasSelectedElements;
+
   return (
     <>
       {renderSidebars()}
@@ -151,7 +144,7 @@ export const MobileMenu = ({
             marginBottom: SCROLLBAR_WIDTH + SCROLLBAR_MARGIN,
           }}
         >
-          {appState.showToolSettings && (
+          {shouldShowShapeActions && (
             <MobileShapeActions
               appState={appState}
               elementsMap={app.scene.getNonDeletedElementsMap()}

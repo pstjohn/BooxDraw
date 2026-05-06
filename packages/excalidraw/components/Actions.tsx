@@ -386,6 +386,9 @@ const CombinedShapeProperties = ({
             container={container}
             style={{ maxWidth: "13rem" }}
             onClose={() => {}}
+            onPointerDownOutside={() => {
+              setAppState({ openPopup: null });
+            }}
           >
             <div className="selected-shape-actions">
               {showFillIcons && renderAction("changeFillStyle")}
@@ -505,6 +508,9 @@ const CombinedArrowProperties = ({
             className="properties-content"
             style={{ maxWidth: "13rem" }}
             onClose={() => {}}
+            onPointerDownOutside={() => {
+              setAppState({ openPopup: null });
+            }}
           >
             {renderAction("changeArrowProperties")}
           </PropertiesPopover>
@@ -579,6 +585,9 @@ const CombinedTextProperties = ({
             className={PROPERTIES_CLASSES}
             container={container}
             style={{ maxWidth: "13rem" }}
+            onPointerDownOutside={() => {
+              setAppState({ openPopup: null });
+            }}
             // Improve focus handling for text editing scenarios
             preventAutoFocusOnTouch={!!appState.editingTextElement}
             onClose={() => {
@@ -689,6 +698,9 @@ const CombinedExtraActions = ({
               alignItems: "center",
             }}
             onClose={() => {}}
+            onPointerDownOutside={() => {
+              setAppState({ openPopup: null });
+            }}
           >
             <div className="selected-shape-actions">
               <fieldset>
@@ -1124,6 +1136,7 @@ export const ShapesSwitcher = ({
                     app.setActiveTool({ type });
                     setAppState({
                       preferredSelectionTool: { type, initialized: true },
+                      showToolSettings: true,
                     });
                   }
                 }}
@@ -1134,6 +1147,35 @@ export const ShapesSwitcher = ({
                   ) || SELECTION_TOOLS[0]
                 }
                 fillable={activeTool.type === "selection"}
+              />
+            );
+          }
+
+          if (value === "freedraw") {
+            return (
+              <ToolButton
+                className={clsx("Shape", { fillable })}
+                key={value}
+                type="button"
+                icon={icon}
+                selected={activeTool.type === value}
+                title={`${capitalizeString(label)} — ${shortcut}`}
+                keyBindingLabel={keybindingLabel}
+                aria-label={capitalizeString(label)}
+                aria-keyshortcuts={shortcut}
+                data-testid={`toolbar-${value}`}
+                onClick={() => {
+                  if (app.state.activeTool.type !== value) {
+                    trackEvent("toolbar", value, "ui");
+                  }
+                  app.setActiveTool({ type: value });
+                  window.setTimeout(() => {
+                    setAppState({
+                      showToolSettings: true,
+                      openPopup: "compactStrokeStyles",
+                    });
+                  }, 0);
+                }}
               />
             );
           }
@@ -1175,6 +1217,10 @@ export const ShapesSwitcher = ({
                 } else {
                   app.setActiveTool({ type: value });
                 }
+                setAppState({
+                  showToolSettings: true,
+                  openPopup: null,
+                });
               }}
             />
           );

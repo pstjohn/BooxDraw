@@ -125,6 +125,13 @@ export const MobileToolBar = ({
 
   const { TTDDialogTriggerTunnel } = useTunnels();
 
+  const openFreedrawSettings = () => {
+    setAppState({
+      showToolSettings: true,
+      openPopup: "compactStrokeStyles",
+    });
+  };
+
   const handleToolChange = (toolType: string, pointerType?: string) => {
     if (app.state.activeTool.type !== toolType) {
       trackEvent("toolbar", toolType, "ui");
@@ -139,6 +146,7 @@ export const MobileToolBar = ({
     } else {
       app.setActiveTool({ type: toolType as ToolType });
     }
+    setAppState({ showToolSettings: true, openPopup: null });
   };
 
   const [toolbarWidth, setToolbarWidth] = useState(0);
@@ -221,6 +229,7 @@ export const MobileToolBar = ({
             app.setActiveTool({ type });
             setAppState({
               preferredSelectionTool: { type, initialized: true },
+              showToolSettings: true,
             });
           }
         }}
@@ -236,14 +245,16 @@ export const MobileToolBar = ({
         className={clsx({
           active: activeTool.type === "freedraw",
         })}
-        type="radio"
+        type="button"
         icon={FreedrawIcon}
-        checked={activeTool.type === "freedraw"}
-        name="editor-current-shape"
+        selected={activeTool.type === "freedraw"}
         title={`${capitalizeString(t("toolBar.freedraw"))}`}
         aria-label={capitalizeString(t("toolBar.freedraw"))}
         data-testid="toolbar-freedraw"
-        onChange={() => handleToolChange("freedraw")}
+        onClick={() => {
+          handleToolChange("freedraw");
+          openFreedrawSettings();
+        }}
       />
 
       {/* Eraser */}
@@ -288,6 +299,7 @@ export const MobileToolBar = ({
           ) {
             setLastActiveGenericShape(type);
             app.setActiveTool({ type });
+            setAppState({ showToolSettings: true });
           }
         }}
         displayedOption={
@@ -316,6 +328,7 @@ export const MobileToolBar = ({
           if (type === "arrow" || type === "line") {
             setLastActiveLinearElement(type);
             app.setActiveTool({ type });
+            setAppState({ showToolSettings: true });
           }
         }}
         displayedOption={
@@ -407,7 +420,7 @@ export const MobileToolBar = ({
         >
           {!showTextToolOutside && (
             <DropdownMenu.Item
-              onSelect={() => app.setActiveTool({ type: "text" })}
+              onSelect={() => handleToolChange("text")}
               icon={TextIcon}
               shortcut={KEYS.T.toLocaleUpperCase()}
               data-testid="toolbar-text"
@@ -419,7 +432,7 @@ export const MobileToolBar = ({
 
           {!showImageToolOutside && (
             <DropdownMenu.Item
-              onSelect={() => app.setActiveTool({ type: "image" })}
+              onSelect={() => handleToolChange("image")}
               icon={ImageIcon}
               data-testid="toolbar-image"
               selected={activeTool.type === "image"}
@@ -429,7 +442,7 @@ export const MobileToolBar = ({
           )}
           {!showFrameToolOutside && (
             <DropdownMenu.Item
-              onSelect={() => app.setActiveTool({ type: "frame" })}
+              onSelect={() => handleToolChange("frame")}
               icon={frameToolIcon}
               shortcut={KEYS.F.toLocaleUpperCase()}
               data-testid="toolbar-frame"
@@ -439,7 +452,7 @@ export const MobileToolBar = ({
             </DropdownMenu.Item>
           )}
           <DropdownMenu.Item
-            onSelect={() => app.setActiveTool({ type: "embeddable" })}
+            onSelect={() => handleToolChange("embeddable")}
             icon={EmbedIcon}
             data-testid="toolbar-embeddable"
             selected={embeddableToolSelected}
@@ -447,7 +460,7 @@ export const MobileToolBar = ({
             {t("toolBar.embeddable")}
           </DropdownMenu.Item>
           <DropdownMenu.Item
-            onSelect={() => app.setActiveTool({ type: "laser" })}
+            onSelect={() => handleToolChange("laser")}
             icon={laserPointerToolIcon}
             data-testid="toolbar-laser"
             selected={laserToolSelected}

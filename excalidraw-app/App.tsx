@@ -107,6 +107,7 @@ import {
   exportToExcalidrawPlus,
 } from "./components/ExportToExcalidrawPlus";
 import { TopErrorBoundary } from "./components/TopErrorBoundary";
+import { connectOnyxPenBridge } from "./onyx/onyx-pen-bridge";
 
 import {
   exportToBackend,
@@ -406,10 +407,15 @@ const ExcalidrawWrapper = () => {
 
   const [, setShareDialogState] = useAtom(shareDialogStateAtom);
   const [collabAPI] = useAtom(collabAPIAtom);
+  const collabAPIRef = useRef(collabAPI);
   const [isCollaborating] = useAtomWithInitialValue(isCollaboratingAtom, () => {
     return isCollaborationLink(window.location.href);
   });
   const collabError = useAtomValue(collabErrorIndicatorAtom);
+
+  useEffect(() => {
+    collabAPIRef.current = collabAPI;
+  }, [collabAPI]);
 
   useHandleLibrary({
     excalidrawAPI,
@@ -417,6 +423,61 @@ const ExcalidrawWrapper = () => {
     // TODO maybe remove this in several months (shipped: 24-03-11)
     migrationAdapter: LibraryLocalStorageMigrationAdapter,
   });
+
+  useEffect(() => {
+    if (!excalidrawAPI) {
+      return;
+    }
+    const pendingSyncTimeouts = new Set<number>();
+    const disconnectOnyxPenBridge = connectOnyxPenBridge(excalidrawAPI, {
+      onElementsChange: (elements) => {
+        const syncElements = (delayMs: number) => {
+          const runSync = () => {
+            pendingSyncTimeouts.delete(timeoutId);
+            const currentCollabAPI = collabAPIRef.current;
+            const isOnyxCollabActive =
+              currentCollabAPI?.isCollaborating() ?? false;
+            const latestElements =
+              delayMs === 0
+                ? elements
+                : excalidrawAPI.getSceneElementsIncludingDeleted();
+            console.info(
+              [
+                "OnyxPen collab sync",
+                `active=${isOnyxCollabActive}`,
+                `elements=${latestElements.length}`,
+                `delay=${delayMs}`,
+              ].join(" "),
+            );
+            if (isOnyxCollabActive) {
+              currentCollabAPI?.syncElements(latestElements, {
+                force: true,
+                syncAll: delayMs > 0,
+              });
+            }
+          };
+
+          const timeoutId =
+            delayMs === 0 ? 0 : window.setTimeout(runSync, delayMs);
+          if (delayMs === 0) {
+            runSync();
+          } else {
+            pendingSyncTimeouts.add(timeoutId);
+          }
+        };
+
+        syncElements(0);
+        syncElements(1000);
+        syncElements(5500);
+      },
+    });
+    return () => {
+      for (const timeoutId of pendingSyncTimeouts) {
+        window.clearTimeout(timeoutId);
+      }
+      disconnectOnyxPenBridge();
+    };
+  }, [excalidrawAPI]);
 
   const [, forceRefresh] = useState(false);
 

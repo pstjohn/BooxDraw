@@ -195,7 +195,7 @@ export class EraserTrail extends AnimatedTrail {
   }
 }
 
-const eraserTest = (
+export const eraserTest = (
   pathSegment: LineSegment<GlobalPoint>,
   element: ExcalidrawElement,
   elementsMap: ElementsMap,

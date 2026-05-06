@@ -46,6 +46,37 @@ class Portal {
         trackEvent("share", "room joined");
       }
     });
+    this.socket.on("connect", () => {
+      console.info(
+        [
+          "OnyxPen socket connect",
+          `connected=${this.socket?.connected ?? false}`,
+          `socketId=${this.socket?.id ?? "none"}`,
+          `room=${this.roomId ?? "none"}`,
+        ].join(" "),
+      );
+    });
+    this.socket.on("connect_error", (error: Error & { description?: any }) => {
+      console.info(
+        [
+          "OnyxPen socket connect_error",
+          `message=${error.message}`,
+          `description=${String(error.description ?? "")}`,
+          `connected=${this.socket?.connected ?? false}`,
+          `room=${this.roomId ?? "none"}`,
+        ].join(" "),
+      );
+    });
+    this.socket.on("disconnect", (reason: string) => {
+      console.info(
+        [
+          "OnyxPen socket disconnect",
+          `reason=${reason}`,
+          `connected=${this.socket?.connected ?? false}`,
+          `room=${this.roomId ?? "none"}`,
+        ].join(" "),
+      );
+    });
     this.socket.on("new-user", async (_socketId: string) => {
       this.broadcastScene(
         WS_SUBTYPES.INIT,
@@ -87,6 +118,27 @@ class Portal {
     volatile: boolean = false,
     roomId?: string,
   ) {
+    if (
+      data.type === WS_SUBTYPES.UPDATE ||
+      data.type === WS_SUBTYPES.INIT
+    ) {
+      const elements =
+        data.type === WS_SUBTYPES.UPDATE || data.type === WS_SUBTYPES.INIT
+          ? data.payload.elements.length
+          : 0;
+      console.info(
+        [
+          "OnyxPen socket emit",
+          `type=${data.type}`,
+          `elements=${elements}`,
+          `open=${this.isOpen()}`,
+          `initialized=${this.socketInitialized}`,
+          `connected=${this.socket?.connected ?? false}`,
+          `socketId=${this.socket?.id ?? "none"}`,
+          `room=${roomId ?? this.roomId ?? "none"}`,
+        ].join(" "),
+      );
+    }
     if (this.isOpen()) {
       const json = JSON.stringify(data);
       const encoded = new TextEncoder().encode(json);
@@ -169,6 +221,16 @@ class Portal {
         elements: syncableElements,
       },
     };
+
+    console.info(
+      [
+        "OnyxPen broadcastScene",
+        `type=${updateType}`,
+        `syncAll=${syncAll}`,
+        `input=${elements.length}`,
+        `syncable=${syncableElements.length}`,
+      ].join(" "),
+    );
 
     for (const syncableElement of syncableElements) {
       this.broadcastedElementVersions.set(

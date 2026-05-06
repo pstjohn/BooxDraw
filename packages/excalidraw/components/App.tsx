@@ -7751,6 +7751,9 @@ class App extends React.Component<AppProps, AppState> {
     if (this.state.openPopup) {
       this.setState({ openPopup: null });
     }
+    if (this.state.showToolSettings) {
+      this.setState({ showToolSettings: false });
+    }
 
     this.updateGestureOnPointerDown(event);
 
@@ -7934,12 +7937,16 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     const allowOnPointerDown =
-      !this.state.penMode ||
-      event.pointerType !== "touch" ||
-      this.state.activeTool.type === "selection" ||
-      this.state.activeTool.type === "lasso" ||
-      this.state.activeTool.type === "text" ||
-      this.state.activeTool.type === "image";
+      !(
+        window.__ONYX_NATIVE_PEN__ &&
+        this.state.activeTool.type === "freedraw"
+      ) &&
+      (!this.state.penMode ||
+        event.pointerType === "pen" ||
+        this.state.activeTool.type === "selection" ||
+        this.state.activeTool.type === "lasso" ||
+        this.state.activeTool.type === "text" ||
+        this.state.activeTool.type === "image");
 
     if (!allowOnPointerDown) {
       return;

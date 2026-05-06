@@ -67,6 +67,7 @@ import {
   getCollaborationLink,
   getSyncableElements,
 } from "../data";
+import type { RoomCodeInfo } from "../data/roomCode";
 import {
   encodeFilesForUpload,
   FileManager,
@@ -105,9 +106,11 @@ interface CollabState {
   dialogNotifiedErrors: Record<string, boolean>;
   username: string;
   activeRoomLink: string | null;
+  activeRoomCode: RoomCodeInfo | null;
 }
 
 export const activeRoomLinkAtom = atom<string | null>(null);
+export const activeRoomCodeAtom = atom<RoomCodeInfo | null>(null);
 
 type CollabInstance = InstanceType<typeof Collab>;
 
@@ -147,6 +150,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       dialogNotifiedErrors: {},
       username: importUsernameFromLocalStorage() || "",
       activeRoomLink: null,
+      activeRoomCode: null,
     };
     this.portal = new Portal(this);
     this.fileManager = new FileManager({
@@ -409,6 +413,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     if (!opts?.isUnload) {
       this.setIsCollaborating(false);
       this.setActiveRoomLink(null);
+      this.setActiveRoomCode(null);
       this.collaborators = new Map();
       this.excalidrawAPI.updateScene({
         collaborators: this.collaborators,
@@ -470,6 +475,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
   startCollaboration = async (
     existingRoomLinkData: null | { roomId: string; roomKey: string },
+    options?: { isNewRoom?: boolean; roomCode?: RoomCodeInfo },
   ) => {
     if (!this.state.username) {
       import("@excalidraw/random-username").then(({ getRandomUsername }) => {
@@ -485,8 +491,18 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     let roomId;
     let roomKey;
 
+    const isNewRoom = !existingRoomLinkData || options?.isNewRoom === true;
+    const shouldLoadExistingRoom = !!existingRoomLinkData && !isNewRoom;
+
     if (existingRoomLinkData) {
       ({ roomId, roomKey } = existingRoomLinkData);
+      if (isNewRoom) {
+        window.history.pushState(
+          {},
+          APP_NAME,
+          getCollaborationLink({ roomId, roomKey }),
+        );
+      }
     } else {
       ({ roomId, roomKey } = await generateCollaborationLinkData());
       window.history.pushState(
@@ -511,7 +527,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
     const fallbackInitializationHandler = () => {
       this.initializeRoom({
-        roomLinkData: existingRoomLinkData,
+        roomLinkData: shouldLoadExistingRoom ? existingRoomLinkData : null,
         fetchScene: true,
       }).then((scene) => {
         scenePromise.resolve(scene);
@@ -522,7 +538,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     try {
       this.portal.socket = this.portal.open(
         socketIOClient(import.meta.env.VITE_APP_WS_SERVER_URL, {
-          transports: ["websocket", "polling"],
+          transports: ["websocket"],
         }),
         roomId,
         roomKey,
@@ -535,7 +551,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       return null;
     }
 
-    if (existingRoomLinkData) {
+    if (shouldLoadExistingRoom) {
       // when joining existing room, don't merge it with current scene data
       this.excalidrawAPI.resetScene();
     } else {
@@ -682,7 +698,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       }
       const sceneData = await this.initializeRoom({
         fetchScene: true,
-        roomLinkData: existingRoomLinkData,
+        roomLinkData: shouldLoadExistingRoom ? existingRoomLinkData : null,
       });
       scenePromise.resolve(sceneData);
     });
@@ -701,6 +717,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     this.initializeIdleDetector();
 
     this.setActiveRoomLink(window.location.href);
+    this.setActiveRoomCode(options?.roomCode ?? null);
 
     return scenePromise;
   };
@@ -941,19 +958,30 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     this.portal.broadcastIdleChange(userState);
   };
 
-  broadcastElements = (elements: readonly OrderedExcalidrawElement[]) => {
+  broadcastElements = (
+    elements: readonly OrderedExcalidrawElement[],
+    opts?: { force?: boolean; syncAll?: boolean },
+  ) => {
+    const sceneVersion = getSceneVersion(elements);
     if (
-      getSceneVersion(elements) >
-      this.getLastBroadcastedOrReceivedSceneVersion()
+      opts?.force ||
+      sceneVersion > this.getLastBroadcastedOrReceivedSceneVersion()
     ) {
-      this.portal.broadcastScene(WS_SUBTYPES.UPDATE, elements, false);
-      this.lastBroadcastedOrReceivedSceneVersion = getSceneVersion(elements);
+      this.portal.broadcastScene(
+        WS_SUBTYPES.UPDATE,
+        elements,
+        opts?.syncAll ?? false,
+      );
+      this.lastBroadcastedOrReceivedSceneVersion = sceneVersion;
       this.queueBroadcastAllElements();
     }
   };
 
-  syncElements = (elements: readonly OrderedExcalidrawElement[]) => {
-    this.broadcastElements(elements);
+  syncElements = (
+    elements: readonly OrderedExcalidrawElement[],
+    opts?: { force?: boolean; syncAll?: boolean },
+  ) => {
+    this.broadcastElements(elements, opts);
     this.queueSaveToFirebase();
   };
 
@@ -998,6 +1026,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   };
 
   getActiveRoomLink = () => this.state.activeRoomLink;
+
+  setActiveRoomCode = (activeRoomCode: RoomCodeInfo | null) => {
+    this.setState({ activeRoomCode });
+    appJotaiStore.set(activeRoomCodeAtom, activeRoomCode);
+  };
 
   setErrorIndicator = (errorMessage: string | null) => {
     appJotaiStore.set(collabErrorIndicatorAtom, {

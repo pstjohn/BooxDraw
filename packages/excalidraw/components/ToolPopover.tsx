@@ -69,7 +69,7 @@ export const ToolPopover = ({
   }, [app]);
 
   return (
-    <Popover.Root open={isPopupOpen}>
+    <Popover.Root open={isPopupOpen} onOpenChange={setIsPopupOpen}>
       <Popover.Trigger asChild>
         <ToolButton
           className={clsx(className, {
@@ -115,6 +115,7 @@ export const ToolPopover = ({
               }
               app.setActiveTool({ type: type as any });
               onToolChange?.(type);
+              setIsPopupOpen(false);
             }}
           />
         ))}
