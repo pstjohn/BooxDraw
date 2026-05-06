@@ -1,124 +1,92 @@
-<a href="https://excalidraw.com/" target="_blank" rel="noopener">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" alt="Excalidraw" srcset="https://excalidraw.nyc3.cdn.digitaloceanspaces.com/github/excalidraw_github_cover_2_dark.png" />
-    <img alt="Excalidraw" src="https://excalidraw.nyc3.cdn.digitaloceanspaces.com/github/excalidraw_github_cover_2.png" />
-  </picture>
-</a>
+# BooxDraw
 
-<h4 align="center">
-  <a href="https://excalidraw.com">Excalidraw Editor</a> |
-  <a href="https://plus.excalidraw.com/blog">Blog</a> |
-  <a href="https://docs.excalidraw.com">Documentation</a> |
-  <a href="https://plus.excalidraw.com">Excalidraw+</a>
-</h4>
+BooxDraw is a fork of AndroidDraw/Excalidraw optimized for Boox and other e-ink Android tablets. It keeps Excalidraw's collaborative whiteboard model, but changes the Android wrapper and mobile UI so stylus drawing feels usable on low-refresh e-ink screens.
 
-<div align="center">
-  <h2>
-    An open source virtual hand-drawn style whiteboard. </br>
-    Collaborative and end-to-end encrypted. </br>
-  <br />
-  </h2>
-</div>
+The main goal is simple: draw with the Boox stylus using the device's native low-latency ink path, then convert those strokes into real Excalidraw elements that sync to a desktop browser through Excalidraw's live collaboration rooms.
 
-<br />
-<p align="center">
-  <a href="https://github.com/excalidraw/excalidraw/blob/master/LICENSE">
-    <img alt="Excalidraw is released under the MIT license." src="https://img.shields.io/badge/license-MIT-blue.svg"  /></a>
-  <a href="https://www.npmjs.com/package/@excalidraw/excalidraw">
-    <img alt="npm downloads/month" src="https://img.shields.io/npm/dm/@excalidraw/excalidraw"  /></a>
-  <a href="https://docs.excalidraw.com/docs/introduction/contributing">
-    <img alt="PRs welcome!" src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat"  /></a>
-  <a href="https://discord.gg/UexuTaE">
-    <img alt="Chat on Discord" src="https://img.shields.io/discord/723672430744174682?color=738ad6&label=Chat%20on%20Discord&logo=discord&logoColor=ffffff&widget=false"/></a>
-  <a href="https://deepwiki.com/excalidraw/excalidraw">
-    <img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg" /></a>
-  <a href="https://twitter.com/excalidraw">
-    <img alt="Follow Excalidraw on Twitter" src="https://img.shields.io/twitter/follow/excalidraw.svg?label=follow+@excalidraw&style=social&logo=twitter"/></a>
-</p>
+## What This App Does
 
-<div align="center">
-  <figure>
-    <a href="https://excalidraw.com" target="_blank" rel="noopener">
-      <img src="https://excalidraw.nyc3.cdn.digitaloceanspaces.com/github%2Fproduct_showcase.png" alt="Product showcase" />
-    </a>
-    <figcaption>
-      <p align="center">
-        Create beautiful hand-drawn like diagrams, wireframes, or whatever you like.
-      </p>
-    </figcaption>
-  </figure>
-</div>
+- Runs Excalidraw inside a Capacitor Android app.
+- Uses the Boox/Onyx native handwriting layer for immediate stylus feedback.
+- Converts native stylus strokes into Excalidraw freedraw elements after a short idle delay.
+- Keeps Excalidraw live collaboration active, so tablet strokes appear in a desktop browser.
+- Supports finger gestures for normal Excalidraw interactions while keeping finger touches from drawing stray lines.
+- Provides a short room-code flow for joining tablet-created rooms from desktop without typing long `#room=...` URLs.
 
-## Features
+## Main Changes In This Fork
 
-The Excalidraw editor (npm package) supports:
+- Added an Onyx pen bridge in Android using `TouchHelper`, a transparent WebView, and a native drawing `SurfaceView`.
+- Added a TypeScript bridge that converts native pen payloads into Excalidraw freedraw elements.
+- Tuned pen behavior for e-ink: thinner strokes, less pressure variability for thin lines, delayed conversion while writing, and native eraser support.
+- Changed mobile tool popovers so stylus taps can open settings, dismiss them by tapping the canvas, and interact with toolbar controls.
+- Prevented finger touches from drawing while preserving finger gestures for selecting, panning, and zooming.
+- Added regional e-ink repaint calls after native ink is replaced by Excalidraw-rendered strokes.
+- Added deterministic 10-character room codes:
+  - Tablet creates a new room from a generated code and today's date.
+  - Desktop opens `https://pcstj.com/BooxDraw/`, enters the code, and is redirected to the matching Excalidraw live room.
+  - No backend stores room URLs; both sides derive the same room id/key locally.
+- Added a tablet workflow to reset the canvas and generate a fresh coded room.
 
-- 💯&nbsp;Free & open-source.
-- 🎨&nbsp;Infinite, canvas-based whiteboard.
-- ✍️&nbsp;Hand-drawn like style.
-- 🌓&nbsp;Dark mode.
-- 🏗️&nbsp;Customizable.
-- 📷&nbsp;Image support.
-- 😀&nbsp;Shape libraries support.
-- 🌐&nbsp;Localization (i18n) support.
-- 🖼️&nbsp;Export to PNG, SVG & clipboard.
-- 💾&nbsp;Open format - export drawings as an `.excalidraw` json file.
-- ⚒️&nbsp;Wide range of tools - rectangle, circle, diamond, arrow, line, free-draw, eraser...
-- ➡️&nbsp;Arrow-binding & labeled arrows.
-- 🔙&nbsp;Undo / Redo.
-- 🔍&nbsp;Zoom and panning support.
+## Room Code Workflow
 
-## Excalidraw.com
+1. Open the collaboration/share dialog on the tablet.
+2. Tap `Start with desktop code` to create a live room with a short code.
+3. On desktop, open `https://pcstj.com/BooxDraw/`.
+4. Enter the code shown on the tablet.
+5. The desktop browser joins the same Excalidraw live room.
 
-The app hosted at [excalidraw.com](https://excalidraw.com) is a minimal showcase of what you can build with Excalidraw. Its [source code](https://github.com/excalidraw/excalidraw/tree/master/excalidraw-app) is part of this repository as well, and the app features:
+To start over on the tablet, open the active collaboration dialog and tap `Reset canvas + new code`.
 
-- 📡&nbsp;PWA support (works offline).
-- 🤼&nbsp;Real-time collaboration.
-- 🔒&nbsp;End-to-end encryption.
-- 💾&nbsp;Local-first support (autosaves to the browser).
-- 🔗&nbsp;Shareable links (export to a readonly link you can share with others).
+Room codes are convenient, not high-security. The code and current date determine the Excalidraw room key, so anyone with the code on the same day can derive the room URL.
 
-We'll be adding these features as drop-in plugins for the npm package in the future.
+## Building For Android
 
-## Quick start
-
-**Note:** following instructions are for installing the Excalidraw [npm package](https://www.npmjs.com/package/@excalidraw/excalidraw) when integrating Excalidraw into your own app. To run the repository locally for development, please refer to our [Development Guide](https://docs.excalidraw.com/docs/introduction/development).
-
-Use `npm` or `yarn` to install the package.
+Install dependencies:
 
 ```bash
-npm install react react-dom @excalidraw/excalidraw
-# or
-yarn add react react-dom @excalidraw/excalidraw
+npm install
 ```
 
-Check out our [documentation](https://docs.excalidraw.com/docs/@excalidraw/excalidraw/installation) for more details!
+Build the web app:
 
-## Contributing
+```bash
+npm run build
+```
 
-- Missing something or found a bug? [Report here](https://github.com/excalidraw/excalidraw/issues).
-- Want to contribute? Check out our [contribution guide](https://docs.excalidraw.com/docs/introduction/contributing) or let us know on [Discord](https://discord.gg/UexuTaE).
-- Want to help with translations? See the [translation guide](https://docs.excalidraw.com/docs/introduction/contributing#translating).
+Sync Capacitor:
 
-## Integrations
+```bash
+npx cap sync android
+```
 
-- [VScode extension](https://marketplace.visualstudio.com/items?itemName=pomdtr.excalidraw-editor)
-- [npm package](https://www.npmjs.com/package/@excalidraw/excalidraw)
+Build the debug APK:
 
-## Who's integrating Excalidraw
+```bash
+cd android
+./gradlew assembleDebug
+```
 
-[Google Cloud](https://googlecloudcheatsheet.withgoogle.com/architecture) • [Meta](https://meta.com/) • [CodeSandbox](https://codesandbox.io/) • [Obsidian Excalidraw](https://github.com/zsviczian/obsidian-excalidraw-plugin) • [Replit](https://replit.com/) • [Slite](https://slite.com/) • [Notion](https://notion.so/) • [HackerRank](https://www.hackerrank.com/) • and many others
+Install on a connected device:
 
-## Sponsors & support
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
 
-If you like the project, you can become a sponsor at [Open Collective](https://opencollective.com/excalidraw) or use [Excalidraw+](https://plus.excalidraw.com/).
+## GitHub Pages Resolver
 
-## Thank you for supporting Excalidraw
+The static room-code resolver lives in `docs/` and is intended to be served by GitHub Pages from the `boox` branch:
 
-[<img src="https://opencollective.com/excalidraw/tiers/sponsors/0/avatar.svg?avatarHeight=120"/>](https://opencollective.com/excalidraw/tiers/sponsors/0/website) [<img src="https://opencollective.com/excalidraw/tiers/sponsors/1/avatar.svg?avatarHeight=120"/>](https://opencollective.com/excalidraw/tiers/sponsors/1/website) [<img src="https://opencollective.com/excalidraw/tiers/sponsors/2/avatar.svg?avatarHeight=120"/>](https://opencollective.com/excalidraw/tiers/sponsors/2/website) [<img src="https://opencollective.com/excalidraw/tiers/sponsors/3/avatar.svg?avatarHeight=120"/>](https://opencollective.com/excalidraw/tiers/sponsors/3/website) [<img src="https://opencollective.com/excalidraw/tiers/sponsors/4/avatar.svg?avatarHeight=120"/>](https://opencollective.com/excalidraw/tiers/sponsors/4/website) [<img src="https://opencollective.com/excalidraw/tiers/sponsors/5/avatar.svg?avatarHeight=120"/>](https://opencollective.com/excalidraw/tiers/sponsors/5/website) [<img src="https://opencollective.com/excalidraw/tiers/sponsors/6/avatar.svg?avatarHeight=120"/>](https://opencollective.com/excalidraw/tiers/sponsors/6/website) [<img src="https://opencollective.com/excalidraw/tiers/sponsors/7/avatar.svg?avatarHeight=120"/>](https://opencollective.com/excalidraw/tiers/sponsors/7/website) [<img src="https://opencollective.com/excalidraw/tiers/sponsors/8/avatar.svg?avatarHeight=120"/>](https://opencollective.com/excalidraw/tiers/sponsors/8/website) [<img src="https://opencollective.com/excalidraw/tiers/sponsors/9/avatar.svg?avatarHeight=120"/>](https://opencollective.com/excalidraw/tiers/sponsors/9/website) [<img src="https://opencollective.com/excalidraw/tiers/sponsors/10/avatar.svg?avatarHeight=120"/>](https://opencollective.com/excalidraw/tiers/sponsors/10/website)
+```text
+Settings -> Pages -> Deploy from branch -> boox -> /docs
+```
 
-<a href="https://opencollective.com/excalidraw#category-CONTRIBUTE" target="_blank"><img src="https://opencollective.com/excalidraw/tiers/backers.svg?avatarHeight=32"/></a>
+## Credits
 
-Last but not least, we're thankful to these companies for offering their services for free:
+BooxDraw is built on:
 
-[![Vercel](./.github/assets/vercel.svg)](https://vercel.com) [![Sentry](./.github/assets/sentry.svg)](https://sentry.io) [![Crowdin](./.github/assets/crowdin.svg)](https://crowdin.com)
+- [Excalidraw](https://github.com/excalidraw/excalidraw)
+- [AndroidDraw](https://github.com/NicolasPauferro/AndroidDraw)
+- Capacitor for the Android wrapper
+- Boox/Onyx handwriting APIs for low-latency stylus preview
+
+Excalidraw is released under the MIT license.
