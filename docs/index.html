@@ -158,22 +158,16 @@
           />
         </label>
 
-        <label>
-          Date
-          <input name="date" type="date" required />
-        </label>
-
         <div class="actions">
           <button type="submit">Join Room</button>
-          <button type="button" id="new-code">New Code</button>
         </div>
 
         <div class="error" id="error" role="alert"></div>
       </form>
 
       <p class="note">
-        Codes are date-scoped and deterministic. The room link is generated in
-        this browser; nothing is uploaded by this page.
+        Codes use today's date and are deterministic. The room link is
+        generated in this browser; nothing is uploaded by this page.
       </p>
     </main>
 
@@ -186,9 +180,7 @@
       const encoder = new TextEncoder();
       const form = document.querySelector("#room-form");
       const codeInput = form.elements.code;
-      const dateInput = form.elements.date;
       const errorEl = document.querySelector("#error");
-      const newCodeButton = document.querySelector("#new-code");
 
       const normalizeRoomCode = (code) =>
         code
@@ -236,15 +228,6 @@
           .replace(/=+$/g, "");
       };
 
-      const generateRoomCode = () => {
-        const bytes = new Uint8Array(ROOM_CODE_LENGTH);
-        window.crypto.getRandomValues(bytes);
-        return Array.from(
-          bytes,
-          (byte) => ROOM_CODE_ALPHABET[byte & 31],
-        ).join("");
-      };
-
       const deriveRoom = async (code, date) => {
         const normalized = normalizeRoomCode(code);
         const digest = new Uint8Array(
@@ -262,15 +245,10 @@
 
       const joinRoom = async () => {
         const code = normalizeRoomCode(codeInput.value);
-        const date = dateInput.value;
+        const date = getRoomCodeDate();
 
         if (!isValidRoomCode(code)) {
           errorEl.textContent = "Enter a valid 10-character room code.";
-          return;
-        }
-
-        if (!date) {
-          errorEl.textContent = "Choose the date shown on the tablet.";
           return;
         }
 
@@ -294,13 +272,6 @@
           errorEl.textContent = "Could not create the room link.";
         });
       });
-
-      newCodeButton.addEventListener("click", () => {
-        codeInput.value = formatRoomCode(generateRoomCode());
-        errorEl.textContent = "";
-      });
-
-      dateInput.value = getRoomCodeDate();
 
       const initialCode = new URLSearchParams(window.location.search).get(
         "code",

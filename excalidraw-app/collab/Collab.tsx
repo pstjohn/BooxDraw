@@ -125,6 +125,7 @@ export interface CollabAPI {
   setUsername: CollabInstance["setUsername"];
   getUsername: CollabInstance["getUsername"];
   getActiveRoomLink: CollabInstance["getActiveRoomLink"];
+  resetScene: CollabInstance["resetScene"];
   setCollabError: CollabInstance["setErrorDialog"];
 }
 
@@ -241,6 +242,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       setUsername: this.setUsername,
       getUsername: this.getUsername,
       getActiveRoomLink: this.getActiveRoomLink,
+      resetScene: this.resetScene,
       setCollabError: this.setErrorDialog,
     };
 
@@ -1030,6 +1032,10 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   setActiveRoomCode = (activeRoomCode: RoomCodeInfo | null) => {
     this.setState({ activeRoomCode });
     appJotaiStore.set(activeRoomCodeAtom, activeRoomCode);
+  };
+
+  resetScene = () => {
+    this.excalidrawAPI.resetScene();
   };
 
   setErrorIndicator = (errorMessage: string | null) => {

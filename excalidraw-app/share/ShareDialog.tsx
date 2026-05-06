@@ -54,6 +54,36 @@ const getShareIcon = () => {
   return share;
 };
 
+const createRoomCodeInfo = () => ({
+  code: generateRoomCode(),
+  date: getRoomCodeDate(),
+});
+
+const startCodedRoom = async (
+  collabAPI: CollabAPI,
+  opts?: { resetCanvas?: boolean },
+) => {
+  const roomCode = createRoomCodeInfo();
+  const roomLinkData = await deriveCollaborationLinkDataFromRoomCode(
+    roomCode.code,
+    roomCode.date,
+  );
+
+  if (collabAPI.isCollaborating()) {
+    collabAPI.stopCollaboration(false);
+  }
+
+  if (opts?.resetCanvas) {
+    collabAPI.resetScene();
+  }
+
+  trackEvent("share", "room code creation", `ui (${getFrame()})`);
+  collabAPI.startCollaboration(roomLinkData, {
+    isNewRoom: true,
+    roomCode,
+  });
+};
+
 export type ShareDialogProps = {
   collabAPI: CollabAPI | null;
   handleClose: () => void;
@@ -162,8 +192,7 @@ const ActiveRoomDialog = ({
             {formatRoomCode(activeRoomCode.code)}
           </div>
           <div className="ShareDialog__active__roomCode__hint">
-            Open pstjohn.github.io/BooxDraw and enter this code for{" "}
-            {activeRoomCode.date}.
+            Open pcstj.com/BooxDraw and enter this code.
           </div>
         </div>
       )}
@@ -182,6 +211,17 @@ const ActiveRoomDialog = ({
       </div>
 
       <div className="ShareDialog__active__actions">
+        {activeRoomCode && (
+          <FilledButton
+            size="large"
+            variant="outlined"
+            label="Reset canvas + new code"
+            icon={LinkIcon}
+            onClick={() => {
+              startCodedRoom(collabAPI, { resetCanvas: true });
+            }}
+          />
+        )}
         <FilledButton
           size="large"
           variant="outlined"
@@ -205,27 +245,6 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
   const { t } = useI18n();
 
   const { collabAPI } = props;
-
-  const startCodedRoom = async () => {
-    if (!collabAPI) {
-      return;
-    }
-
-    const roomCode = {
-      code: generateRoomCode(),
-      date: getRoomCodeDate(),
-    };
-    const roomLinkData = await deriveCollaborationLinkDataFromRoomCode(
-      roomCode.code,
-      roomCode.date,
-    );
-
-    trackEvent("share", "room code creation", `ui (${getFrame()})`);
-    collabAPI.startCollaboration(roomLinkData, {
-      isNewRoom: true,
-      roomCode,
-    });
-  };
 
   const startCollabJSX = collabAPI ? (
     <>
@@ -255,7 +274,7 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
           variant="outlined"
           label="Start with desktop code"
           icon={LinkIcon}
-          onClick={startCodedRoom}
+          onClick={() => collabAPI && startCodedRoom(collabAPI)}
         />
       </div>
 
