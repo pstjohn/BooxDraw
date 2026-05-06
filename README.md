@@ -43,6 +43,8 @@ Room codes are convenient, not high-security. The code and current date determin
 
 ## Building For Android
 
+GitHub Actions builds downloadable APK artifacts from the `boox` branch. Open the latest `Build Android APK` workflow run and download the `BooxDraw-apks-*` artifact.
+
 Install dependencies:
 
 ```bash
