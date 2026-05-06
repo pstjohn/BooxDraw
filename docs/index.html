@@ -280,9 +280,11 @@
       };
 
       codeInput.addEventListener("input", () => {
-        const selectionStart = codeInput.selectionStart;
         codeInput.value = formatRoomCode(codeInput.value);
-        codeInput.setSelectionRange(selectionStart, selectionStart);
+        codeInput.setSelectionRange(
+          codeInput.value.length,
+          codeInput.value.length,
+        );
       });
 
       form.addEventListener("submit", (event) => {
