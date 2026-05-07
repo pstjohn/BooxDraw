@@ -95,9 +95,7 @@ const OnyxPen = registerPlugin<OnyxPenPlugin>("OnyxPen");
 const CONVERT_IDLE_MS = 500;
 const FLUSH_IDLE_TIMEOUT_MS = 350;
 const MAX_STROKES_PER_FLUSH = 12;
-const MAX_STAGED_STROKES_PER_SCENE_UPDATE = 96;
-const STAGED_STROKE_APPLY_QUIET_MS = 1600;
-const STAGED_STROKE_APPLY_IDLE_TIMEOUT_MS = 5000;
+const STAGED_STROKE_APPLY_MS = 100;
 const THIN_STROKE_WIDTH = 0.45;
 const BOLD_STROKE_WIDTH = 0.8;
 const EXTRA_BOLD_STROKE_WIDTH = 1.35;
@@ -149,8 +147,40 @@ type StagedStrokeBatch = {
   elements: ExcalidrawElement[];
   nativeClearRect: NativeRect | null;
   nativeStrokeGeneration: number;
-  applyDelayTimeout: number;
-  applyIdleCallback: number;
+  applyTimeout: number;
+};
+
+type StrokeConversionAppState = {
+  zoomValue: number;
+  offsetLeft: number;
+  offsetTop: number;
+  scrollX: number;
+  scrollY: number;
+  currentItemStrokeColor: string;
+  currentItemBackgroundColor: ExcalidrawElement["backgroundColor"];
+  currentItemFillStyle: ExcalidrawElement["fillStyle"];
+  currentItemStrokeWidth: number;
+  currentItemStrokeStyle: ExcalidrawElement["strokeStyle"];
+  currentItemRoughness: number;
+};
+
+type StrokeConversionRequest = {
+  id: number;
+  payloads: OnyxStrokePayload[];
+  appState: StrokeConversionAppState;
+  viewportWidth: number;
+  viewportHeight: number;
+};
+
+type StrokeConversionResponse = {
+  id: number;
+  elements?: ExcalidrawElement[];
+  error?: string;
+};
+
+type PendingStrokeConversion = {
+  resolve: (elements: ExcalidrawElement[]) => void;
+  reject: (error: Error) => void;
 };
 
 export const connectOnyxPenBridge = (
@@ -165,6 +195,12 @@ export const connectOnyxPenBridge = (
   let flushTimeout = 0;
   let flushIdleCallback = 0;
   let flushIdleCallbackType: IdleCallbackHandleType | null = null;
+  let flushInProgress = false;
+  let strokeWorker: Worker | null = null;
+  let strokeWorkerUnavailable = false;
+  let nextStrokeWorkerRequestId = 1;
+  let strokeConversionEpoch = 0;
+  const pendingStrokeConversions = new Map<number, PendingStrokeConversion>();
   const nativeInkHandoff: NativeInkHandoffState = {
     deferredRect: null,
     scheduledRect: null,
@@ -175,8 +211,7 @@ export const connectOnyxPenBridge = (
     elements: [],
     nativeClearRect: null,
     nativeStrokeGeneration: 0,
-    applyDelayTimeout: 0,
-    applyIdleCallback: 0,
+    applyTimeout: 0,
   };
   const pendingStrokes: OnyxStrokePayload[] = [];
 
@@ -238,8 +273,10 @@ export const connectOnyxPenBridge = (
 
   const handleSceneReset = () => {
     pendingStrokes.length = 0;
+    strokeConversionEpoch++;
     cancelScheduledFlush();
     clearStagedStrokeBatch();
+    resetStrokeWorker();
     clearNativeInkHandoffTimeouts(nativeInkHandoff);
     nativeInkHandoff.deferredRect = null;
     nativeInkHandoff.scheduledRect = null;
@@ -264,11 +301,16 @@ export const connectOnyxPenBridge = (
   };
 
   const scheduleFlushWhenIdle = () => {
+    if (flushInProgress || flushIdleCallback) {
+      return;
+    }
+
     const runFlush = () => {
       flushIdleCallback = 0;
       flushIdleCallbackType = null;
       if (pendingStrokes.length) {
-        flushStrokes(
+        flushInProgress = true;
+        void flushStrokes(
           excalidrawAPI,
           pendingStrokes,
           options,
@@ -276,8 +318,18 @@ export const connectOnyxPenBridge = (
           stagedStrokeBatch,
           applyStagedStrokes,
           scheduleStagedStrokeApply,
-          scheduleFlushWhenIdle,
-        );
+          convertStrokePayloads,
+          () => strokeConversionEpoch,
+        )
+          .catch((error) => {
+            console.info("OnyxPen stroke flush failed", error);
+          })
+          .finally(() => {
+            flushInProgress = false;
+            if (!disposed && pendingStrokes.length) {
+              scheduleFlushWhenIdle();
+            }
+          });
       }
     };
     const idleWindow = window as WindowWithIdleCallback;
@@ -315,49 +367,97 @@ export const connectOnyxPenBridge = (
     cancelFlushIdleCallback();
   };
 
-  const scheduleStagedStrokeApply = () => {
-    if (
-      stagedStrokeBatch.applyDelayTimeout ||
-      stagedStrokeBatch.applyIdleCallback
-    ) {
-      return;
+  const resetStrokeWorker = () => {
+    if (strokeWorker) {
+      strokeWorker.terminate();
+      strokeWorker = null;
     }
 
-    stagedStrokeBatch.applyDelayTimeout = window.setTimeout(() => {
-      stagedStrokeBatch.applyDelayTimeout = 0;
+    const error = new Error("OnyxPen stroke conversion cancelled");
+    for (const pendingConversion of pendingStrokeConversions.values()) {
+      pendingConversion.reject(error);
+    }
+    pendingStrokeConversions.clear();
+  };
 
-      const idleWindow = window as WindowWithIdleCallback;
-      if (idleWindow.requestIdleCallback) {
-        const idleCallback = idleWindow.requestIdleCallback(
-          () => {
-            if (stagedStrokeBatch.applyIdleCallback !== idleCallback) {
-              return;
-            }
-            stagedStrokeBatch.applyIdleCallback = 0;
-            applyStagedStrokes();
-          },
-          { timeout: STAGED_STROKE_APPLY_IDLE_TIMEOUT_MS },
-        );
-        stagedStrokeBatch.applyIdleCallback = idleCallback;
+  const getStrokeWorker = () => {
+    if (strokeWorkerUnavailable || typeof Worker === "undefined") {
+      throw new Error("OnyxPen stroke worker unavailable");
+    }
+
+    if (strokeWorker) {
+      return strokeWorker;
+    }
+
+    strokeWorker = new Worker(
+      new URL("./onyx-stroke-worker.ts", import.meta.url),
+      { type: "module" },
+    );
+    strokeWorker.onmessage = (
+      event: MessageEvent<StrokeConversionResponse>,
+    ) => {
+      const { id, elements, error } = event.data;
+      const pendingConversion = pendingStrokeConversions.get(id);
+      if (!pendingConversion) {
         return;
       }
 
+      pendingStrokeConversions.delete(id);
+      if (error) {
+        pendingConversion.reject(new Error(error));
+        return;
+      }
+      pendingConversion.resolve(elements ?? []);
+    };
+    strokeWorker.onerror = (event) => {
+      strokeWorkerUnavailable = true;
+      resetStrokeWorker();
+      console.info("OnyxPen stroke worker failed", event.message);
+    };
+
+    return strokeWorker;
+  };
+
+  const convertStrokePayloads = (
+    payloads: OnyxStrokePayload[],
+  ): Promise<ExcalidrawElement[]> => {
+    const appState = getStrokeConversionAppState(excalidrawAPI);
+    const requestId = nextStrokeWorkerRequestId++;
+
+    return new Promise((resolve, reject) => {
+      const worker = getStrokeWorker();
+      pendingStrokeConversions.set(requestId, { resolve, reject });
+      try {
+        const request: StrokeConversionRequest = {
+          id: requestId,
+          payloads,
+          appState,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+        };
+        worker.postMessage(request);
+      } catch (error) {
+        pendingStrokeConversions.delete(requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  };
+
+  const scheduleStagedStrokeApply = () => {
+    if (stagedStrokeBatch.applyTimeout) {
+      return;
+    }
+
+    stagedStrokeBatch.applyTimeout = window.setTimeout(() => {
+      stagedStrokeBatch.applyTimeout = 0;
       applyStagedStrokes();
-    }, STAGED_STROKE_APPLY_QUIET_MS);
+    }, STAGED_STROKE_APPLY_MS);
   };
 
   const cancelStagedStrokeApply = () => {
-    if (stagedStrokeBatch.applyDelayTimeout) {
-      window.clearTimeout(stagedStrokeBatch.applyDelayTimeout);
-      stagedStrokeBatch.applyDelayTimeout = 0;
-    }
-
-    if (stagedStrokeBatch.applyIdleCallback) {
-      const idleWindow = window as WindowWithIdleCallback;
-      if (idleWindow.cancelIdleCallback) {
-        idleWindow.cancelIdleCallback(stagedStrokeBatch.applyIdleCallback);
-      }
-      stagedStrokeBatch.applyIdleCallback = 0;
+    if (stagedStrokeBatch.applyTimeout) {
+      window.clearTimeout(stagedStrokeBatch.applyTimeout);
+      stagedStrokeBatch.applyTimeout = 0;
     }
   };
 
@@ -406,6 +506,7 @@ export const connectOnyxPenBridge = (
 
   return () => {
     disposed = true;
+    strokeConversionEpoch++;
     if (excludedRectsInterval) {
       window.clearInterval(excludedRectsInterval);
     }
@@ -417,6 +518,7 @@ export const connectOnyxPenBridge = (
     }
     cancelFlushIdleCallback();
     clearStagedStrokeBatch();
+    resetStrokeWorker();
     clearNativeInkHandoffTimeouts(nativeInkHandoff);
     window.removeEventListener(SCENE_RESET_EVENT, handleSceneReset);
     listener?.remove();
@@ -428,7 +530,7 @@ export const connectOnyxPenBridge = (
   };
 };
 
-const flushStrokes = (
+const flushStrokes = async (
   excalidrawAPI: ExcalidrawImperativeAPI,
   pendingStrokes: OnyxStrokePayload[],
   options: OnyxPenBridgeOptions,
@@ -436,11 +538,14 @@ const flushStrokes = (
   stagedStrokeBatch: StagedStrokeBatch,
   applyStagedStrokes: () => void,
   scheduleStagedStrokeApply: () => void,
-  onPendingStrokesRemaining?: () => void,
+  convertStrokePayloads: (
+    payloads: OnyxStrokePayload[],
+  ) => Promise<ExcalidrawElement[]>,
+  getStrokeConversionEpoch: () => number,
 ) => {
   const payloads = pendingStrokes.splice(0, MAX_STROKES_PER_FLUSH);
-  const hasMorePendingStrokes = pendingStrokes.length > 0;
   const newElements: ExcalidrawElement[] = [];
+  const conversionEpoch = getStrokeConversionEpoch();
   const nativeClearRect = mergeNativeRects(
     nativeInkHandoff.deferredRect,
     getNativeStrokeBounds(payloads),
@@ -457,11 +562,23 @@ const flushStrokes = (
   );
 
   if (!hasEraserStroke) {
-    for (const payload of payloads) {
-      const element = createStrokeElement(excalidrawAPI, payload);
-      if (element) {
-        newElements.push(element);
+    try {
+      newElements.push(...(await convertStrokePayloads(payloads)));
+    } catch (error) {
+      if (conversionEpoch !== getStrokeConversionEpoch()) {
+        return;
       }
+      console.info("OnyxPen using main-thread stroke conversion", error);
+      for (const payload of payloads) {
+        const element = createStrokeElement(excalidrawAPI, payload);
+        if (element) {
+          newElements.push(element);
+        }
+      }
+    }
+
+    if (conversionEpoch !== getStrokeConversionEpoch()) {
+      return;
     }
 
     if (newElements.length) {
@@ -475,22 +592,13 @@ const flushStrokes = (
         nativeStrokeGeneration,
       );
 
-      if (
-        !hasMorePendingStrokes ||
-        stagedStrokeBatch.elements.length >= MAX_STAGED_STROKES_PER_SCENE_UPDATE
-      ) {
-        scheduleStagedStrokeApply();
-      }
+      scheduleStagedStrokeApply();
     } else {
       scheduleNativeInkHandoff(
         nativeClearRect,
         nativeStrokeGeneration,
         nativeInkHandoff,
       );
-    }
-
-    if (hasMorePendingStrokes) {
-      onPendingStrokesRemaining?.();
     }
     return;
   }
@@ -531,9 +639,6 @@ const flushStrokes = (
       nativeStrokeGeneration,
       nativeInkHandoff,
     );
-    if (hasMorePendingStrokes) {
-      onPendingStrokesRemaining?.();
-    }
     return;
   }
 
@@ -553,9 +658,6 @@ const flushStrokes = (
     nativeStrokeGeneration,
     nativeInkHandoff,
   );
-  if (hasMorePendingStrokes) {
-    onPendingStrokesRemaining?.();
-  }
 };
 
 const scheduleNativeInkHandoff = (
@@ -740,6 +842,26 @@ const getPayloadGeneration = (payload: OnyxStrokePayload | undefined) => {
   return typeof generation === "number" && Number.isFinite(generation)
     ? generation
     : null;
+};
+
+const getStrokeConversionAppState = (
+  excalidrawAPI: ExcalidrawImperativeAPI,
+): StrokeConversionAppState => {
+  const appState = excalidrawAPI.getAppState();
+
+  return {
+    zoomValue: appState.zoom.value,
+    offsetLeft: appState.offsetLeft,
+    offsetTop: appState.offsetTop,
+    scrollX: appState.scrollX,
+    scrollY: appState.scrollY,
+    currentItemStrokeColor: appState.currentItemStrokeColor,
+    currentItemBackgroundColor: appState.currentItemBackgroundColor,
+    currentItemFillStyle: appState.currentItemFillStyle,
+    currentItemStrokeWidth: appState.currentItemStrokeWidth,
+    currentItemStrokeStyle: appState.currentItemStrokeStyle,
+    currentItemRoughness: appState.currentItemRoughness,
+  };
 };
 
 const createStrokeElement = (
