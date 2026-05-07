@@ -44,6 +44,7 @@ type OnyxStrokePayload = {
   points?: OnyxPoint[];
   surfaceWidth?: number;
   surfaceHeight?: number;
+  generation?: number;
 };
 
 type NativeRect = {
@@ -53,12 +54,22 @@ type NativeRect = {
   bottom: number;
 };
 
+type NativeHandoffOptions = NativeRect & {
+  expectedGeneration?: number;
+};
+
+type NativeHandoffResult = {
+  didRun?: boolean;
+};
+
 type OnyxPenPlugin = {
   enable: () => Promise<void>;
   disable: () => Promise<void>;
-  clear: (options?: NativeRect) => Promise<void>;
+  clear: (options?: NativeHandoffOptions) => Promise<NativeHandoffResult>;
   refreshWebViewRegion: (options?: NativeRect) => Promise<void>;
-  repaintWebViewHandwriting: (options?: NativeRect) => Promise<void>;
+  repaintWebViewHandwriting: (
+    options?: NativeHandoffOptions,
+  ) => Promise<NativeHandoffResult>;
   setStyle: (options: {
     strokeWidth: number;
     strokeColor: string;
@@ -82,6 +93,8 @@ type OnyxPenBridgeOptions = {
 
 const OnyxPen = registerPlugin<OnyxPenPlugin>("OnyxPen");
 const CONVERT_IDLE_MS = 500;
+const FLUSH_IDLE_TIMEOUT_MS = 350;
+const MAX_STROKES_PER_FLUSH = 1;
 const THIN_STROKE_WIDTH = 0.45;
 const BOLD_STROKE_WIDTH = 0.8;
 const EXTRA_BOLD_STROKE_WIDTH = 1.35;
@@ -101,6 +114,16 @@ const FINAL_REPAINT_AFTER_CLEAR_MS = 170;
 let lastExcludedRectsSignature = "";
 let lastStyleSignature = "";
 
+type IdleCallbackHandleType = "idle" | "timeout";
+
+type WindowWithIdleCallback = Window & {
+  requestIdleCallback?: (
+    callback: IdleRequestCallback,
+    options?: IdleRequestOptions,
+  ) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
+
 type NativeInkHandoffState = {
   deferredRect: NativeRect | null;
   scheduledRect: NativeRect | null;
@@ -118,6 +141,8 @@ export const connectOnyxPenBridge = (
   let excludedRectsInterval = 0;
   let styleInterval = 0;
   let flushTimeout = 0;
+  let flushIdleCallback = 0;
+  let flushIdleCallbackType: IdleCallbackHandleType | null = null;
   const nativeInkHandoff: NativeInkHandoffState = {
     deferredRect: null,
     scheduledRect: null,
@@ -133,23 +158,29 @@ export const connectOnyxPenBridge = (
           queueStroke(excalidrawAPI, payload, pendingStrokes, options);
         }
       });
-      pointerDownListener = await OnyxPen.addListener("onyxPointerDown", () => {
-        if (!disposed) {
-          nativeInkHandoff.strokeGeneration++;
-          if (flushTimeout) {
-            window.clearTimeout(flushTimeout);
-            flushTimeout = 0;
+      pointerDownListener = await OnyxPen.addListener(
+        "onyxPointerDown",
+        (payload) => {
+          if (!disposed) {
+            nativeInkHandoff.strokeGeneration =
+              getPayloadGeneration(payload) ??
+              nativeInkHandoff.strokeGeneration + 1;
+            if (flushTimeout) {
+              window.clearTimeout(flushTimeout);
+              flushTimeout = 0;
+            }
+            cancelFlushIdleCallback();
+            excalidrawAPI.updateScene({
+              appState: {
+                openMenu: null,
+                openPopup: null,
+                showToolSettings: false,
+              },
+              captureUpdate: CaptureUpdateAction.NEVER,
+            });
           }
-          excalidrawAPI.updateScene({
-            appState: {
-              openMenu: null,
-              openPopup: null,
-              showToolSettings: false,
-            },
-            captureUpdate: CaptureUpdateAction.NEVER,
-          });
-        }
-      });
+        },
+      );
       await OnyxPen.enable();
       window.__ONYX_NATIVE_PEN__ = true;
       excalidrawAPI.updateScene({
@@ -181,13 +212,60 @@ export const connectOnyxPenBridge = (
     options: OnyxPenBridgeOptions,
   ) => {
     pendingStrokes.push(payload);
-    if (flushTimeout) {
-      window.clearTimeout(flushTimeout);
-    }
+    cancelScheduledFlush();
     flushTimeout = window.setTimeout(() => {
       flushTimeout = 0;
-      flushStrokes(excalidrawAPI, pendingStrokes, options, nativeInkHandoff);
+      scheduleFlushWhenIdle();
     }, CONVERT_IDLE_MS);
+  };
+
+  const scheduleFlushWhenIdle = () => {
+    const runFlush = () => {
+      flushIdleCallback = 0;
+      flushIdleCallbackType = null;
+      if (pendingStrokes.length) {
+        flushStrokes(
+          excalidrawAPI,
+          pendingStrokes,
+          options,
+          nativeInkHandoff,
+          scheduleFlushWhenIdle,
+        );
+      }
+    };
+    const idleWindow = window as WindowWithIdleCallback;
+    if (idleWindow.requestIdleCallback) {
+      flushIdleCallback = idleWindow.requestIdleCallback(runFlush, {
+        timeout: FLUSH_IDLE_TIMEOUT_MS,
+      });
+      flushIdleCallbackType = "idle";
+      return;
+    }
+
+    flushIdleCallback = window.setTimeout(runFlush, 0);
+    flushIdleCallbackType = "timeout";
+  };
+
+  const cancelFlushIdleCallback = () => {
+    if (!flushIdleCallback) {
+      return;
+    }
+    const idleWindow = window as WindowWithIdleCallback;
+    if (flushIdleCallbackType === "idle" && idleWindow.cancelIdleCallback) {
+      idleWindow.cancelIdleCallback(flushIdleCallback);
+    } else {
+      window.clearTimeout(flushIdleCallback);
+    }
+    flushIdleCallback = 0;
+    flushIdleCallbackType = null;
+  };
+
+  const cancelScheduledFlush = () => {
+    if (flushTimeout) {
+      window.clearTimeout(flushTimeout);
+      flushTimeout = 0;
+    }
+    cancelFlushIdleCallback();
   };
 
   attach();
@@ -203,6 +281,7 @@ export const connectOnyxPenBridge = (
     if (flushTimeout) {
       window.clearTimeout(flushTimeout);
     }
+    cancelFlushIdleCallback();
     clearNativeInkHandoffTimeouts(nativeInkHandoff);
     listener?.remove();
     pointerDownListener?.remove();
@@ -218,12 +297,18 @@ const flushStrokes = (
   pendingStrokes: OnyxStrokePayload[],
   options: OnyxPenBridgeOptions,
   nativeInkHandoff: NativeInkHandoffState,
+  onPendingStrokesRemaining?: () => void,
 ) => {
-  const payloads = pendingStrokes.splice(0);
+  const payloads = pendingStrokes.splice(0, MAX_STROKES_PER_FLUSH);
+  const hasMorePendingStrokes = pendingStrokes.length > 0;
   const newElements: ExcalidrawElement[] = [];
   const nativeClearRect = mergeNativeRects(
     nativeInkHandoff.deferredRect,
     getNativeStrokeBounds(payloads),
+  );
+  const nativeStrokeGeneration = getNativeStrokeGeneration(
+    payloads,
+    nativeInkHandoff.strokeGeneration,
   );
   nativeInkHandoff.deferredRect = null;
   let elements: readonly ExcalidrawElement[] =
@@ -257,7 +342,14 @@ const flushStrokes = (
   }
 
   if (!didChange) {
-    scheduleNativeInkHandoff(nativeClearRect, nativeInkHandoff);
+    scheduleNativeInkHandoff(
+      nativeClearRect,
+      nativeStrokeGeneration,
+      nativeInkHandoff,
+    );
+    if (hasMorePendingStrokes) {
+      onPendingStrokesRemaining?.();
+    }
     return;
   }
 
@@ -271,11 +363,19 @@ const flushStrokes = (
     captureUpdate: CaptureUpdateAction.IMMEDIATELY,
   });
   options.onElementsChange?.(orderedElements);
-  scheduleNativeInkHandoff(nativeClearRect, nativeInkHandoff);
+  scheduleNativeInkHandoff(
+    nativeClearRect,
+    nativeStrokeGeneration,
+    nativeInkHandoff,
+  );
+  if (hasMorePendingStrokes) {
+    onPendingStrokesRemaining?.();
+  }
 };
 
 const scheduleNativeInkHandoff = (
   nativeClearRect: NativeRect | null,
+  nativeStrokeGeneration: number,
   nativeInkHandoff: NativeInkHandoffState,
 ) => {
   if (!nativeClearRect) {
@@ -292,7 +392,7 @@ const scheduleNativeInkHandoff = (
   }
 
   clearNativeInkHandoffTimeouts(nativeInkHandoff);
-  const scheduledGeneration = nativeInkHandoff.strokeGeneration;
+  const scheduledGeneration = nativeStrokeGeneration;
   const addTimeout = (callback: () => void, delay: number) => {
     const timeout = window.setTimeout(() => {
       nativeInkHandoff.timeouts = nativeInkHandoff.timeouts.filter(
@@ -304,7 +404,9 @@ const scheduleNativeInkHandoff = (
   };
 
   addTimeout(() => {
-    OnyxPen.repaintWebViewHandwriting(scheduledRect).catch(() => {
+    OnyxPen.repaintWebViewHandwriting(
+      withExpectedGeneration(scheduledRect, scheduledGeneration),
+    ).catch(() => {
       // Native plugin is only available inside the Android shell.
     });
   }, WEBVIEW_RENDER_SETTLE_MS);
@@ -324,16 +426,40 @@ const scheduleNativeInkHandoff = (
     if (nativeInkHandoff.scheduledRect === scheduledRect) {
       nativeInkHandoff.scheduledRect = null;
     }
-    OnyxPen.clear(scheduledRect).catch(() => {
-      // Native plugin is only available inside the Android shell.
-    });
+    OnyxPen.clear(withExpectedGeneration(scheduledRect, scheduledGeneration))
+      .then((result) => {
+        if (result?.didRun === false) {
+          nativeInkHandoff.deferredRect = mergeNativeRects(
+            nativeInkHandoff.deferredRect,
+            scheduledRect,
+          );
+        }
+      })
+      .catch(() => {
+        // Native plugin is only available inside the Android shell.
+      });
   }, WEBVIEW_RENDER_SETTLE_MS + NATIVE_CLEAR_AFTER_REPAINT_MS);
 
   addTimeout(() => {
-    OnyxPen.repaintWebViewHandwriting(scheduledRect).catch(() => {
+    OnyxPen.repaintWebViewHandwriting(
+      withExpectedGeneration(scheduledRect, scheduledGeneration),
+    ).catch(() => {
       // Native plugin is only available inside the Android shell.
     });
   }, WEBVIEW_RENDER_SETTLE_MS + NATIVE_CLEAR_AFTER_REPAINT_MS + FINAL_REPAINT_AFTER_CLEAR_MS);
+};
+
+const withExpectedGeneration = (
+  rect: NativeRect,
+  expectedGeneration: number,
+): NativeHandoffOptions => {
+  if (!Number.isFinite(expectedGeneration) || expectedGeneration <= 0) {
+    return { ...rect };
+  }
+  return {
+    ...rect,
+    expectedGeneration,
+  };
 };
 
 const clearNativeInkHandoffTimeouts = (
@@ -411,6 +537,24 @@ const getNativeStrokeBounds = (
         ? Math.min(surfaceHeight, Math.ceil(bottom + CLEAR_REGION_PADDING))
         : Math.ceil(bottom + CLEAR_REGION_PADDING),
   };
+};
+
+const getNativeStrokeGeneration = (
+  payloads: OnyxStrokePayload[],
+  fallbackGeneration: number,
+) => {
+  let generation = fallbackGeneration;
+  for (const payload of payloads) {
+    generation = Math.max(generation, getPayloadGeneration(payload) ?? 0);
+  }
+  return generation;
+};
+
+const getPayloadGeneration = (payload: OnyxStrokePayload | undefined) => {
+  const generation = payload?.generation;
+  return typeof generation === "number" && Number.isFinite(generation)
+    ? generation
+    : null;
 };
 
 const createStrokeElement = (

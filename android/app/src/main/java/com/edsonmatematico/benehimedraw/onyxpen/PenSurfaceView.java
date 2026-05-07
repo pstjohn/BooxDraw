@@ -37,6 +37,8 @@ public class PenSurfaceView extends SurfaceView implements SurfaceHolder.Callbac
     private boolean routingStylusToWebView;
     private int clearInkGeneration;
     private boolean rawDrawingRenderSuspended;
+    private int strokeGeneration;
+    private boolean stylusActive;
 
     public PenSurfaceView(Context context) {
         super(context);
@@ -174,6 +176,27 @@ public class PenSurfaceView extends SurfaceView implements SurfaceHolder.Callbac
         }, 300);
     }
 
+    public boolean clearInkIfSafe(@Nullable Rect dirtyRect, @Nullable Integer expectedStrokeGeneration) {
+        if (!canApplyNativeHandoff(expectedStrokeGeneration)) {
+            Log.i(OnyxInputBridge.TAG, "clearInk skipped expectedGeneration="
+                    + expectedStrokeGeneration
+                    + " currentGeneration=" + strokeGeneration
+                    + " stylusActive=" + stylusActive);
+            return false;
+        }
+        clearInk(dirtyRect);
+        return true;
+    }
+
+    public boolean canApplyNativeHandoff(@Nullable Integer expectedStrokeGeneration) {
+        return expectedStrokeGeneration == null
+                || (expectedStrokeGeneration == strokeGeneration && !stylusActive);
+    }
+
+    public int getStrokeGeneration() {
+        return strokeGeneration;
+    }
+
     private void setRawDrawingRenderEnabledForClear(boolean enabled) {
         TouchHelper helper = touchHelper;
         if (helper == null) return;
@@ -269,9 +292,12 @@ public class PenSurfaceView extends SurfaceView implements SurfaceHolder.Callbac
         if (action == MotionEvent.ACTION_DOWN) {
             motionStrokePoints.clear();
             motionStrokeStartedAt = SystemClock.uptimeMillis();
+            strokeGeneration++;
+            stylusActive = true;
             resumeRawDrawingRenderForNewStroke();
             Log.i(OnyxInputBridge.TAG, "dispatchTouchEvent DOWN stylus=true"
-                    + " tool=" + ev.getToolType(0));
+                    + " tool=" + ev.getToolType(0)
+                    + " generation=" + strokeGeneration);
             inputCallback.onStylusPointerDown();
             addMotionPoints(ev);
         } else if (action == MotionEvent.ACTION_MOVE) {
@@ -281,6 +307,7 @@ public class PenSurfaceView extends SurfaceView implements SurfaceHolder.Callbac
             List<OnyxInputBridge.StrokePoint> points = new ArrayList<>(motionStrokePoints);
             long startedAt = motionStrokeStartedAt;
             motionStrokePoints.clear();
+            stylusActive = false;
             postDelayed(() -> {
                 if (inputCallback.hasRawStrokeSince(startedAt)) {
                     Log.i(OnyxInputBridge.TAG, "motion fallback skipped raw stroke already received");

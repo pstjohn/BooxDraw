@@ -68,13 +68,19 @@ public class OnyxPenPlugin extends Plugin {
     public void clear(PluginCall call) {
         PenSurfaceView surface = penSurface;
         Rect dirtyRect = parseDirtyRect(call);
+        Integer expectedGeneration = parseExpectedGeneration(call);
         Activity activity = getActivity();
         if (surface != null && activity != null) {
-            activity.runOnUiThread(() -> surface.clearInk(dirtyRect));
+            activity.runOnUiThread(() -> {
+                boolean didRun = surface.clearInkIfSafe(dirtyRect, expectedGeneration);
+                call.resolve(createHandoffResult(didRun));
+            });
         } else if (surface != null) {
-            surface.clearInk(dirtyRect);
+            boolean didRun = surface.clearInkIfSafe(dirtyRect, expectedGeneration);
+            call.resolve(createHandoffResult(didRun));
+        } else {
+            call.resolve(createHandoffResult(false));
         }
-        call.resolve();
     }
 
     @PluginMethod
@@ -165,25 +171,36 @@ public class OnyxPenPlugin extends Plugin {
     @PluginMethod
     public void repaintWebViewHandwriting(PluginCall call) {
         Rect dirtyRect = parseDirtyRect(call);
+        Integer expectedGeneration = parseExpectedGeneration(call);
         Activity activity = getActivity();
         if (activity == null) {
-            call.resolve();
+            call.resolve(createHandoffResult(false));
             return;
         }
 
         activity.runOnUiThread(() -> {
+            PenSurfaceView surface = penSurface;
+            if (surface != null && !surface.canApplyNativeHandoff(expectedGeneration)) {
+                Log.i(OnyxInputBridge.TAG, "repaintWebViewHandwriting skipped expectedGeneration="
+                        + expectedGeneration
+                        + " currentGeneration=" + surface.getStrokeGeneration());
+                call.resolve(createHandoffResult(false));
+                return;
+            }
             WebView webView = findWebView();
             Rect refreshRect = normalizeDirtyRect(webView, dirtyRect);
+            boolean didRun = false;
             if (webView != null && refreshRect != null) {
                 try {
                     Log.i(OnyxInputBridge.TAG, "repaintWebViewHandwriting rect=" + refreshRect);
                     webView.invalidate(refreshRect);
                     EpdController.handwritingRepaint(webView, refreshRect);
+                    didRun = true;
                 } catch (Throwable t) {
                     Log.w(OnyxInputBridge.TAG, "repaintWebViewHandwriting failed", t);
                 }
             }
-            call.resolve();
+            call.resolve(createHandoffResult(didRun));
         });
     }
 
@@ -243,6 +260,19 @@ public class OnyxPenPlugin extends Plugin {
         int right = (int) Math.ceil(call.getDouble("right", 0.0));
         int bottom = (int) Math.ceil(call.getDouble("bottom", 0.0));
         return right > left && bottom > top ? new Rect(left, top, right, bottom) : null;
+    }
+
+    @Nullable
+    private Integer parseExpectedGeneration(PluginCall call) {
+        return call.getData().has("expectedGeneration")
+                ? call.getData().optInt("expectedGeneration")
+                : null;
+    }
+
+    private static JSObject createHandoffResult(boolean didRun) {
+        JSObject result = new JSObject();
+        result.put("didRun", didRun);
+        return result;
     }
 
     @PluginMethod
@@ -388,6 +418,7 @@ public class OnyxPenPlugin extends Plugin {
         payload.put("points", jsPoints);
         payload.put("surfaceWidth", surface == null ? 0 : surface.getWidth());
         payload.put("surfaceHeight", surface == null ? 0 : surface.getHeight());
+        payload.put("generation", surface == null ? 0 : surface.getStrokeGeneration());
 
         Activity activity = getActivity();
         if (activity != null) {
@@ -398,11 +429,14 @@ public class OnyxPenPlugin extends Plugin {
     }
 
     private void emitPointerDown() {
+        PenSurfaceView surface = penSurface;
+        JSObject payload = new JSObject();
+        payload.put("generation", surface == null ? 0 : surface.getStrokeGeneration());
         Activity activity = getActivity();
         if (activity != null) {
-            activity.runOnUiThread(() -> notifyListeners("onyxPointerDown", new JSObject(), true));
+            activity.runOnUiThread(() -> notifyListeners("onyxPointerDown", payload, true));
         } else {
-            notifyListeners("onyxPointerDown", new JSObject(), true);
+            notifyListeners("onyxPointerDown", payload, true);
         }
     }
 }
