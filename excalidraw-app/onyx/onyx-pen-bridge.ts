@@ -94,7 +94,10 @@ type OnyxPenBridgeOptions = {
 const OnyxPen = registerPlugin<OnyxPenPlugin>("OnyxPen");
 const CONVERT_IDLE_MS = 500;
 const FLUSH_IDLE_TIMEOUT_MS = 350;
-const MAX_STROKES_PER_FLUSH = 1;
+const MAX_STROKES_PER_FLUSH = 12;
+const MAX_STAGED_STROKES_PER_SCENE_UPDATE = 96;
+const STAGED_STROKE_APPLY_QUIET_MS = 1600;
+const STAGED_STROKE_APPLY_IDLE_TIMEOUT_MS = 5000;
 const THIN_STROKE_WIDTH = 0.45;
 const BOLD_STROKE_WIDTH = 0.8;
 const EXTRA_BOLD_STROKE_WIDTH = 1.35;
@@ -111,8 +114,19 @@ const CLEAR_REGION_PADDING = 48;
 const WEBVIEW_RENDER_SETTLE_MS = 48;
 const NATIVE_CLEAR_AFTER_REPAINT_MS = 70;
 const FINAL_REPAINT_AFTER_CLEAR_MS = 170;
+const SCENE_RESET_EVENT = "booxdraw:scene-reset";
 let lastExcludedRectsSignature = "";
 let lastStyleSignature = "";
+let pendingOnyxSceneUpdateCount = 0;
+
+export const consumePendingOnyxSceneUpdate = () => {
+  if (pendingOnyxSceneUpdateCount <= 0) {
+    return false;
+  }
+
+  pendingOnyxSceneUpdateCount--;
+  return true;
+};
 
 type IdleCallbackHandleType = "idle" | "timeout";
 
@@ -129,6 +143,14 @@ type NativeInkHandoffState = {
   scheduledRect: NativeRect | null;
   strokeGeneration: number;
   timeouts: number[];
+};
+
+type StagedStrokeBatch = {
+  elements: ExcalidrawElement[];
+  nativeClearRect: NativeRect | null;
+  nativeStrokeGeneration: number;
+  applyDelayTimeout: number;
+  applyIdleCallback: number;
 };
 
 export const connectOnyxPenBridge = (
@@ -148,6 +170,13 @@ export const connectOnyxPenBridge = (
     scheduledRect: null,
     strokeGeneration: 0,
     timeouts: [],
+  };
+  const stagedStrokeBatch: StagedStrokeBatch = {
+    elements: [],
+    nativeClearRect: null,
+    nativeStrokeGeneration: 0,
+    applyDelayTimeout: 0,
+    applyIdleCallback: 0,
   };
   const pendingStrokes: OnyxStrokePayload[] = [];
 
@@ -170,6 +199,7 @@ export const connectOnyxPenBridge = (
               flushTimeout = 0;
             }
             cancelFlushIdleCallback();
+            cancelStagedStrokeApply();
             excalidrawAPI.updateScene({
               appState: {
                 openMenu: null,
@@ -200,9 +230,23 @@ export const connectOnyxPenBridge = (
         () => updateNativeStyle(excalidrawAPI),
         250,
       );
+      window.addEventListener(SCENE_RESET_EVENT, handleSceneReset);
     } catch (error) {
       console.info("OnyxPen bridge unavailable", error);
     }
+  };
+
+  const handleSceneReset = () => {
+    pendingStrokes.length = 0;
+    cancelScheduledFlush();
+    clearStagedStrokeBatch();
+    clearNativeInkHandoffTimeouts(nativeInkHandoff);
+    nativeInkHandoff.deferredRect = null;
+    nativeInkHandoff.scheduledRect = null;
+    nativeInkHandoff.strokeGeneration++;
+    OnyxPen.clear().catch(() => {
+      // Native plugin is only available inside the Android shell.
+    });
   };
 
   const queueStroke = (
@@ -229,6 +273,9 @@ export const connectOnyxPenBridge = (
           pendingStrokes,
           options,
           nativeInkHandoff,
+          stagedStrokeBatch,
+          applyStagedStrokes,
+          scheduleStagedStrokeApply,
           scheduleFlushWhenIdle,
         );
       }
@@ -268,6 +315,93 @@ export const connectOnyxPenBridge = (
     cancelFlushIdleCallback();
   };
 
+  const scheduleStagedStrokeApply = () => {
+    if (
+      stagedStrokeBatch.applyDelayTimeout ||
+      stagedStrokeBatch.applyIdleCallback
+    ) {
+      return;
+    }
+
+    stagedStrokeBatch.applyDelayTimeout = window.setTimeout(() => {
+      stagedStrokeBatch.applyDelayTimeout = 0;
+
+      const idleWindow = window as WindowWithIdleCallback;
+      if (idleWindow.requestIdleCallback) {
+        const idleCallback = idleWindow.requestIdleCallback(
+          () => {
+            if (stagedStrokeBatch.applyIdleCallback !== idleCallback) {
+              return;
+            }
+            stagedStrokeBatch.applyIdleCallback = 0;
+            applyStagedStrokes();
+          },
+          { timeout: STAGED_STROKE_APPLY_IDLE_TIMEOUT_MS },
+        );
+        stagedStrokeBatch.applyIdleCallback = idleCallback;
+        return;
+      }
+
+      applyStagedStrokes();
+    }, STAGED_STROKE_APPLY_QUIET_MS);
+  };
+
+  const cancelStagedStrokeApply = () => {
+    if (stagedStrokeBatch.applyDelayTimeout) {
+      window.clearTimeout(stagedStrokeBatch.applyDelayTimeout);
+      stagedStrokeBatch.applyDelayTimeout = 0;
+    }
+
+    if (stagedStrokeBatch.applyIdleCallback) {
+      const idleWindow = window as WindowWithIdleCallback;
+      if (idleWindow.cancelIdleCallback) {
+        idleWindow.cancelIdleCallback(stagedStrokeBatch.applyIdleCallback);
+      }
+      stagedStrokeBatch.applyIdleCallback = 0;
+    }
+  };
+
+  const clearStagedStrokeBatch = () => {
+    cancelStagedStrokeApply();
+    stagedStrokeBatch.elements = [];
+    stagedStrokeBatch.nativeClearRect = null;
+    stagedStrokeBatch.nativeStrokeGeneration = 0;
+  };
+
+  const applyStagedStrokes = () => {
+    cancelStagedStrokeApply();
+    if (!stagedStrokeBatch.elements.length) {
+      return;
+    }
+
+    const stagedElements = stagedStrokeBatch.elements;
+    const nativeClearRect = stagedStrokeBatch.nativeClearRect;
+    const nativeStrokeGeneration = stagedStrokeBatch.nativeStrokeGeneration;
+    stagedStrokeBatch.elements = [];
+    stagedStrokeBatch.nativeClearRect = null;
+    stagedStrokeBatch.nativeStrokeGeneration = 0;
+
+    const orderedElements = syncInvalidIndices([
+      ...excalidrawAPI.getSceneElementsIncludingDeleted(),
+      ...stagedElements,
+    ]);
+
+    pendingOnyxSceneUpdateCount++;
+    excalidrawAPI.updateScene({
+      elements: orderedElements,
+      appState: {
+        selectedElementIds: {},
+      },
+      captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+    });
+    options.onElementsChange?.(orderedElements);
+    scheduleNativeInkHandoff(
+      nativeClearRect,
+      nativeStrokeGeneration,
+      nativeInkHandoff,
+    );
+  };
+
   attach();
 
   return () => {
@@ -282,7 +416,9 @@ export const connectOnyxPenBridge = (
       window.clearTimeout(flushTimeout);
     }
     cancelFlushIdleCallback();
+    clearStagedStrokeBatch();
     clearNativeInkHandoffTimeouts(nativeInkHandoff);
+    window.removeEventListener(SCENE_RESET_EVENT, handleSceneReset);
     listener?.remove();
     pointerDownListener?.remove();
     window.__ONYX_NATIVE_PEN__ = false;
@@ -297,6 +433,9 @@ const flushStrokes = (
   pendingStrokes: OnyxStrokePayload[],
   options: OnyxPenBridgeOptions,
   nativeInkHandoff: NativeInkHandoffState,
+  stagedStrokeBatch: StagedStrokeBatch,
+  applyStagedStrokes: () => void,
+  scheduleStagedStrokeApply: () => void,
   onPendingStrokesRemaining?: () => void,
 ) => {
   const payloads = pendingStrokes.splice(0, MAX_STROKES_PER_FLUSH);
@@ -311,11 +450,56 @@ const flushStrokes = (
     nativeInkHandoff.strokeGeneration,
   );
   nativeInkHandoff.deferredRect = null;
+  const appState = excalidrawAPI.getAppState();
+  const hasEraserStroke = payloads.some(
+    (payload) =>
+      payload.tool === "eraser" || appState.activeTool.type === "eraser",
+  );
+
+  if (!hasEraserStroke) {
+    for (const payload of payloads) {
+      const element = createStrokeElement(excalidrawAPI, payload);
+      if (element) {
+        newElements.push(element);
+      }
+    }
+
+    if (newElements.length) {
+      stagedStrokeBatch.elements.push(...newElements);
+      stagedStrokeBatch.nativeClearRect = mergeNativeRects(
+        stagedStrokeBatch.nativeClearRect,
+        nativeClearRect,
+      );
+      stagedStrokeBatch.nativeStrokeGeneration = Math.max(
+        stagedStrokeBatch.nativeStrokeGeneration,
+        nativeStrokeGeneration,
+      );
+
+      if (
+        !hasMorePendingStrokes ||
+        stagedStrokeBatch.elements.length >= MAX_STAGED_STROKES_PER_SCENE_UPDATE
+      ) {
+        scheduleStagedStrokeApply();
+      }
+    } else {
+      scheduleNativeInkHandoff(
+        nativeClearRect,
+        nativeStrokeGeneration,
+        nativeInkHandoff,
+      );
+    }
+
+    if (hasMorePendingStrokes) {
+      onPendingStrokesRemaining?.();
+    }
+    return;
+  }
+
+  applyStagedStrokes();
   let elements: readonly ExcalidrawElement[] =
     excalidrawAPI.getSceneElementsIncludingDeleted();
   let didChange = false;
   for (const payload of payloads) {
-    const appState = excalidrawAPI.getAppState();
     const effectiveTool =
       payload.tool === "eraser" || appState.activeTool.type === "eraser"
         ? "eraser"
@@ -355,6 +539,7 @@ const flushStrokes = (
 
   const orderedElements = syncInvalidIndices(elements);
 
+  pendingOnyxSceneUpdateCount++;
   excalidrawAPI.updateScene({
     elements: orderedElements,
     appState: {

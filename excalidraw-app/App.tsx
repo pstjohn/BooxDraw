@@ -107,7 +107,10 @@ import {
   exportToExcalidrawPlus,
 } from "./components/ExportToExcalidrawPlus";
 import { TopErrorBoundary } from "./components/TopErrorBoundary";
-import { connectOnyxPenBridge } from "./onyx/onyx-pen-bridge";
+import {
+  connectOnyxPenBridge,
+  consumePendingOnyxSceneUpdate,
+} from "./onyx/onyx-pen-bridge";
 
 import {
   exportToBackend,
@@ -150,6 +153,10 @@ import { ExcalidrawPlusPromoBanner } from "./components/ExcalidrawPlusPromoBanne
 import { AppSidebar } from "./components/AppSidebar";
 
 import type { CollabAPI } from "./collab/Collab";
+
+const ONYX_COLLAB_SYNC_DEBOUNCE_MS = 500;
+const ONYX_COLLAB_SYNC_MAX_WAIT_MS = 2000;
+const ONYX_COLLAB_SYNC_SETTLED_MS = 5500;
 
 polyfill();
 
@@ -429,46 +436,78 @@ const ExcalidrawWrapper = () => {
       return;
     }
     const pendingSyncTimeouts = new Set<number>();
+    let debouncedSyncTimeoutId = 0;
+    let settledSyncTimeoutId = 0;
+    let pendingSyncStartedAt = 0;
+
+    const clearScheduledSync = (timeoutId: number) => {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+        pendingSyncTimeouts.delete(timeoutId);
+      }
+    };
+
+    const runSync = (reason: string) => {
+      const currentCollabAPI = collabAPIRef.current;
+      const isOnyxCollabActive = currentCollabAPI?.isCollaborating() ?? false;
+      const latestElements = excalidrawAPI.getSceneElementsIncludingDeleted();
+
+      console.info(
+        [
+          "OnyxPen collab sync",
+          `active=${isOnyxCollabActive}`,
+          `elements=${latestElements.length}`,
+          `reason=${reason}`,
+        ].join(" "),
+      );
+
+      if (isOnyxCollabActive) {
+        currentCollabAPI?.syncElements(latestElements, {
+          force: true,
+          syncAll: true,
+        });
+      }
+    };
+
+    const scheduleSync = (delayMs: number, reason: string) => {
+      const timeoutId = window.setTimeout(() => {
+        pendingSyncTimeouts.delete(timeoutId);
+        if (timeoutId === debouncedSyncTimeoutId) {
+          debouncedSyncTimeoutId = 0;
+          pendingSyncStartedAt = 0;
+        }
+        if (timeoutId === settledSyncTimeoutId) {
+          settledSyncTimeoutId = 0;
+        }
+        runSync(reason);
+      }, delayMs);
+      pendingSyncTimeouts.add(timeoutId);
+      return timeoutId;
+    };
+
     const disconnectOnyxPenBridge = connectOnyxPenBridge(excalidrawAPI, {
-      onElementsChange: (elements) => {
-        const syncElements = (delayMs: number) => {
-          const runSync = () => {
-            pendingSyncTimeouts.delete(timeoutId);
-            const currentCollabAPI = collabAPIRef.current;
-            const isOnyxCollabActive =
-              currentCollabAPI?.isCollaborating() ?? false;
-            const latestElements =
-              delayMs === 0
-                ? elements
-                : excalidrawAPI.getSceneElementsIncludingDeleted();
-            console.info(
-              [
-                "OnyxPen collab sync",
-                `active=${isOnyxCollabActive}`,
-                `elements=${latestElements.length}`,
-                `delay=${delayMs}`,
-              ].join(" "),
-            );
-            if (isOnyxCollabActive) {
-              currentCollabAPI?.syncElements(latestElements, {
-                force: true,
-                syncAll: delayMs > 0,
-              });
-            }
-          };
+      onElementsChange: () => {
+        const now = Date.now();
+        if (!pendingSyncStartedAt) {
+          pendingSyncStartedAt = now;
+        }
 
-          const timeoutId =
-            delayMs === 0 ? 0 : window.setTimeout(runSync, delayMs);
-          if (delayMs === 0) {
-            runSync();
-          } else {
-            pendingSyncTimeouts.add(timeoutId);
-          }
-        };
+        clearScheduledSync(debouncedSyncTimeoutId);
+        const elapsedMs = now - pendingSyncStartedAt;
+        const debounceDelayMs = Math.max(
+          0,
+          Math.min(
+            ONYX_COLLAB_SYNC_DEBOUNCE_MS,
+            ONYX_COLLAB_SYNC_MAX_WAIT_MS - elapsedMs,
+          ),
+        );
+        debouncedSyncTimeoutId = scheduleSync(debounceDelayMs, "debounced");
 
-        syncElements(0);
-        syncElements(1000);
-        syncElements(5500);
+        clearScheduledSync(settledSyncTimeoutId);
+        settledSyncTimeoutId = scheduleSync(
+          ONYX_COLLAB_SYNC_SETTLED_MS,
+          "settled",
+        );
       },
     });
     return () => {
@@ -741,7 +780,8 @@ const ExcalidrawWrapper = () => {
     appState: AppState,
     files: BinaryFiles,
   ) => {
-    if (collabAPI?.isCollaborating()) {
+    const isOnyxSceneUpdate = consumePendingOnyxSceneUpdate();
+    if (collabAPI?.isCollaborating() && !isOnyxSceneUpdate) {
       collabAPI.syncElements(elements);
     }
 

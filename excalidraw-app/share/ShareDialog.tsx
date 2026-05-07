@@ -75,6 +75,9 @@ const startCodedRoom = async (
 
   if (opts?.resetCanvas) {
     collabAPI.resetScene();
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
   }
 
   trackEvent("share", "room code creation", `ui (${getFrame()})`);

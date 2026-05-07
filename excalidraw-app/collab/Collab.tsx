@@ -67,7 +67,6 @@ import {
   getCollaborationLink,
   getSyncableElements,
 } from "../data";
-import type { RoomCodeInfo } from "../data/roomCode";
 import {
   encodeFilesForUpload,
   FileManager,
@@ -95,6 +94,7 @@ import type {
   SocketUpdateDataSource,
   SyncableExcalidrawElement,
 } from "../data";
+import type { RoomCodeInfo } from "../data/roomCode";
 
 export const collabAPIAtom = atom<CollabAPI | null>(null);
 export const isCollaboratingAtom = atom(false);
@@ -1036,6 +1036,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
   resetScene = () => {
     this.excalidrawAPI.resetScene();
+    window.dispatchEvent(new Event("booxdraw:scene-reset"));
   };
 
   setErrorIndicator = (errorMessage: string | null) => {
