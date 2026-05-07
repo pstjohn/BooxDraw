@@ -4,7 +4,6 @@ interface Window {
   EXCALIDRAW_ASSET_PATH: string | string[] | undefined;
   EXCALIDRAW_THROTTLE_RENDER: boolean | undefined;
   __ONYX_NATIVE_PEN__: boolean | undefined;
-  __ONYX_FREEZE_EXCALIDRAW_CANVAS__: boolean | undefined;
   DEBUG_FRACTIONAL_INDICES: boolean | undefined;
   EXCALIDRAW_EXPORT_SOURCE: string;
   gtag: Function;
