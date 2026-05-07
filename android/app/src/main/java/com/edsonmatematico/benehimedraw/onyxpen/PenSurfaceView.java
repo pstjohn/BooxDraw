@@ -35,6 +35,8 @@ public class PenSurfaceView extends SurfaceView implements SurfaceHolder.Callbac
     private int previewStrokeStyle = StrokeStyle.PENCIL;
     private long motionStrokeStartedAt;
     private boolean routingStylusToWebView;
+    private int clearInkGeneration;
+    private boolean rawDrawingRenderSuspended;
 
     public PenSurfaceView(Context context) {
         super(context);
@@ -143,38 +145,51 @@ public class PenSurfaceView extends SurfaceView implements SurfaceHolder.Callbac
     }
 
     public void clearInk(@Nullable Rect dirtyRect) {
+        int generation = ++clearInkGeneration;
         Rect refreshRect = normalizeDirtyRect(dirtyRect);
         Log.d(OnyxInputBridge.TAG, "clearInk rect=" + refreshRect);
-        TouchHelper helper = touchHelper;
-        if (helper != null) {
-            try {
-                helper.setRawDrawingRenderEnabled(false);
-            } catch (Throwable t) {
-                Log.w(OnyxInputBridge.TAG, "setRawDrawingRenderEnabled(false) failed", t);
-            }
-        }
+        setRawDrawingRenderEnabledForClear(false);
 
         clearSurface(getHolder(), refreshRect);
         refreshInkRegion(refreshRect);
         if (refreshRect != null) {
             Rect delayedRefreshRect = new Rect(refreshRect);
             postDelayed(() -> {
+                if (generation != clearInkGeneration) {
+                    Log.d(OnyxInputBridge.TAG, "clearInk delayed skipped stale generation");
+                    return;
+                }
                 Log.d(OnyxInputBridge.TAG, "clearInk delayed rect=" + delayedRefreshRect);
                 clearSurface(getHolder(), delayedRefreshRect);
                 refreshInkRegion(delayedRefreshRect);
             }, 90);
         }
 
-        if (helper != null) {
-            postDelayed(() -> {
-                try {
-                    helper.setRawDrawingRenderEnabled(true);
-                    Log.d(OnyxInputBridge.TAG, "raw drawing render re-enabled");
-                } catch (Throwable t) {
-                    Log.w(OnyxInputBridge.TAG, "setRawDrawingRenderEnabled(true) failed", t);
-                }
-            }, 300);
+        postDelayed(() -> {
+            if (generation != clearInkGeneration) {
+                Log.d(OnyxInputBridge.TAG, "raw drawing render re-enable skipped stale generation");
+                return;
+            }
+            setRawDrawingRenderEnabledForClear(true);
+        }, 300);
+    }
+
+    private void setRawDrawingRenderEnabledForClear(boolean enabled) {
+        TouchHelper helper = touchHelper;
+        if (helper == null) return;
+        try {
+            helper.setRawDrawingRenderEnabled(enabled);
+            rawDrawingRenderSuspended = !enabled;
+            Log.d(OnyxInputBridge.TAG, "raw drawing render enabled=" + enabled);
+        } catch (Throwable t) {
+            Log.w(OnyxInputBridge.TAG, "setRawDrawingRenderEnabled(" + enabled + ") failed", t);
         }
+    }
+
+    private void resumeRawDrawingRenderForNewStroke() {
+        if (!rawDrawingRenderSuspended) return;
+        ++clearInkGeneration;
+        setRawDrawingRenderEnabledForClear(true);
     }
 
     private void clearSurface(SurfaceHolder holder, Rect dirtyRect) {
@@ -254,6 +269,7 @@ public class PenSurfaceView extends SurfaceView implements SurfaceHolder.Callbac
         if (action == MotionEvent.ACTION_DOWN) {
             motionStrokePoints.clear();
             motionStrokeStartedAt = SystemClock.uptimeMillis();
+            resumeRawDrawingRenderForNewStroke();
             Log.i(OnyxInputBridge.TAG, "dispatchTouchEvent DOWN stylus=true"
                     + " tool=" + ev.getToolType(0));
             inputCallback.onStylusPointerDown();
