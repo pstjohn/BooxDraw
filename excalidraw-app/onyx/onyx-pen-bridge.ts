@@ -2,6 +2,7 @@ import {
   CaptureUpdateAction,
   viewportCoordsToSceneCoords,
 } from "@excalidraw/excalidraw";
+import { registerPlugin } from "@capacitor/core";
 import {
   getBoundTextElementId,
   getElementsInGroup,
@@ -14,9 +15,7 @@ import {
 } from "@excalidraw/element";
 import { eraserTest } from "@excalidraw/excalidraw/eraser";
 import { lineSegment, pointFrom } from "@excalidraw/math";
-import { registerPlugin } from "@capacitor/core";
 
-import type { PluginListenerHandle } from "@capacitor/core";
 import type { LocalPoint } from "@excalidraw/math";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import type {
@@ -25,6 +24,8 @@ import type {
   OrderedExcalidrawElement,
 } from "@excalidraw/element/types";
 import type { GlobalPoint } from "@excalidraw/math/types";
+
+import type { PluginListenerHandle } from "@capacitor/core";
 
 type OnyxPoint = {
   x: number;
@@ -84,9 +85,13 @@ const CONVERT_IDLE_MS = 500;
 const THIN_STROKE_WIDTH = 0.45;
 const BOLD_STROKE_WIDTH = 0.8;
 const EXTRA_BOLD_STROKE_WIDTH = 1.35;
-const PRESSURE_VARIATION = 0.12;
-const MIN_STROKE_POINT_DISTANCE = 0.25;
-const STROKE_SIMPLIFICATION_EPSILON = 0.25;
+const MIN_ONYX_PRESSURE = 0.08;
+const MAX_ONYX_PRESSURE = 1;
+const MIN_STROKE_POINT_DISTANCE = 0.16;
+const STROKE_SIMPLIFICATION_EPSILON = 0.16;
+const ONYX_FREEDRAW_SMOOTHING = 0.28;
+const ONYX_FREEDRAW_STREAMLINE = 0.12;
+const NATIVE_PRESSURE_PREVIEW_WIDTH_SCALE = 1.4;
 const MAX_POINTS_PER_STROKE = 800;
 const MAX_SIMPLIFICATION_PASSES = 4;
 const CLEAR_REGION_PADDING = 48;
@@ -428,6 +433,7 @@ const createStrokeElement = (
         p: point.p,
       };
     }),
+    appState.zoom.value,
   );
 
   if (scenePoints.length < 2) {
@@ -496,6 +502,12 @@ const createStrokeElement = (
     points: localPoints,
     pressures,
     simulatePressure: false,
+    customData: {
+      freedrawOptions: {
+        smoothing: ONYX_FREEDRAW_SMOOTHING,
+        streamline: ONYX_FREEDRAW_STREAMLINE,
+      },
+    },
   });
 };
 
@@ -598,6 +610,7 @@ const getSceneStrokePoints = (
         p: point.p,
       };
     }),
+    appState.zoom.value,
   );
 };
 
@@ -622,9 +635,9 @@ const getNativePreviewStrokeWidth = (
     return 5 * zoom;
   }
   if (effectiveStrokeWidth <= BOLD_STROKE_WIDTH) {
-    return 8 * zoom;
+    return 8 * NATIVE_PRESSURE_PREVIEW_WIDTH_SCALE * zoom;
   }
-  return 12 * zoom;
+  return 12 * NATIVE_PRESSURE_PREVIEW_WIDTH_SCALE * zoom;
 };
 
 const nativePointToClientPoint = (
@@ -646,14 +659,21 @@ const nativePointToClientPoint = (
   };
 };
 
-const simplifyStrokePoints = (points: SceneStrokePoint[]) => {
-  const filtered = filterCloseStrokePoints(points);
+const simplifyStrokePoints = (
+  points: SceneStrokePoint[],
+  zoomValue: number,
+) => {
+  const sceneScale = getSceneScaleForZoom(zoomValue);
+  const filtered = filterCloseStrokePoints(
+    points,
+    MIN_STROKE_POINT_DISTANCE * sceneScale,
+  );
   if (filtered.length <= 2) {
     return filtered;
   }
 
   let simplified = filtered;
-  let epsilon = STROKE_SIMPLIFICATION_EPSILON;
+  let epsilon = STROKE_SIMPLIFICATION_EPSILON * sceneScale;
 
   for (let pass = 0; pass < MAX_SIMPLIFICATION_PASSES; pass++) {
     simplified = simplifyStrokePointsRdp(filtered, epsilon);
@@ -666,15 +686,17 @@ const simplifyStrokePoints = (points: SceneStrokePoint[]) => {
   return sampleStrokePoints(simplified, MAX_POINTS_PER_STROKE);
 };
 
-const filterCloseStrokePoints = (points: SceneStrokePoint[]) => {
+const filterCloseStrokePoints = (
+  points: SceneStrokePoint[],
+  minDistance: number,
+) => {
   if (points.length <= 2) {
     return points;
   }
 
   const filtered: SceneStrokePoint[] = [points[0]];
   let lastKeptPoint = points[0];
-  const minDistanceSquared =
-    MIN_STROKE_POINT_DISTANCE * MIN_STROKE_POINT_DISTANCE;
+  const minDistanceSquared = minDistance * minDistance;
 
   for (let index = 1; index < points.length - 1; index++) {
     const point = points[index];
@@ -689,6 +711,11 @@ const filterCloseStrokePoints = (points: SceneStrokePoint[]) => {
 
   filtered.push(points[points.length - 1]);
   return filtered;
+};
+
+const getSceneScaleForZoom = (zoomValue: number) => {
+  const zoom = Number.isFinite(zoomValue) && zoomValue > 0 ? zoomValue : 1;
+  return 1 / zoom;
 };
 
 const simplifyStrokePointsRdp = (
@@ -789,8 +816,11 @@ const normalizePressures = (
       : pressures;
 
   return normalized.map((pressure) => {
-    const centeredPressure = Math.max(0, Math.min(1, pressure)) - 0.5;
-    return 0.5 + centeredPressure * PRESSURE_VARIATION;
+    const clampedPressure = Math.max(0, Math.min(1, pressure));
+    return (
+      MIN_ONYX_PRESSURE +
+      clampedPressure * (MAX_ONYX_PRESSURE - MIN_ONYX_PRESSURE)
+    );
   });
 };
 

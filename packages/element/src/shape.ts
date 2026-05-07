@@ -1192,11 +1192,22 @@ export const getFreedrawOutlinePoints = (
     simulatePressure: element.simulatePressure,
     size: element.strokeWidth * 4.25,
     thinning: 0.6,
-    smoothing: 0.5,
-    streamline: 0.5,
+    smoothing: getFreedrawOption(element, "smoothing", 0.5),
+    streamline: getFreedrawOption(element, "streamline", 0.5),
     easing: (t) => Math.sin((t * Math.PI) / 2), // https://easings.net/#easeOutSine
     last: true,
   }) as [number, number][];
+};
+
+const getFreedrawOption = (
+  element: ExcalidrawFreeDrawElement,
+  key: "smoothing" | "streamline",
+  fallback: number,
+) => {
+  const value = element.customData?.freedrawOptions?.[key];
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.min(1, value))
+    : fallback;
 };
 
 const med = (A: number[], B: number[]) => {
