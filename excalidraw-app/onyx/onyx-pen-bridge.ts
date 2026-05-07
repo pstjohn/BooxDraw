@@ -45,27 +45,19 @@ type OnyxStrokePayload = {
   surfaceHeight?: number;
 };
 
+type NativeRect = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
+
 type OnyxPenPlugin = {
   enable: () => Promise<void>;
   disable: () => Promise<void>;
-  clear: (options?: {
-    left: number;
-    top: number;
-    right: number;
-    bottom: number;
-  }) => Promise<void>;
-  refreshWebViewRegion: (options?: {
-    left: number;
-    top: number;
-    right: number;
-    bottom: number;
-  }) => Promise<void>;
-  repaintWebViewHandwriting: (options?: {
-    left: number;
-    top: number;
-    right: number;
-    bottom: number;
-  }) => Promise<void>;
+  clear: (options?: NativeRect) => Promise<void>;
+  refreshWebViewRegion: (options?: NativeRect) => Promise<void>;
+  repaintWebViewHandwriting: (options?: NativeRect) => Promise<void>;
   setStyle: (options: {
     strokeWidth: number;
     strokeColor: string;
@@ -98,9 +90,18 @@ const STROKE_SIMPLIFICATION_EPSILON = 0.25;
 const MAX_POINTS_PER_STROKE = 800;
 const MAX_SIMPLIFICATION_PASSES = 4;
 const CLEAR_REGION_PADDING = 48;
-const FINAL_REPAINT_DELAY_MS = 220;
+const WEBVIEW_RENDER_SETTLE_MS = 48;
+const NATIVE_CLEAR_AFTER_REPAINT_MS = 70;
+const FINAL_REPAINT_AFTER_CLEAR_MS = 170;
 let lastExcludedRectsSignature = "";
 let lastStyleSignature = "";
+
+type NativeInkHandoffState = {
+  deferredRect: NativeRect | null;
+  scheduledRect: NativeRect | null;
+  strokeGeneration: number;
+  timeouts: number[];
+};
 
 export const connectOnyxPenBridge = (
   excalidrawAPI: ExcalidrawImperativeAPI,
@@ -112,7 +113,12 @@ export const connectOnyxPenBridge = (
   let excludedRectsInterval = 0;
   let styleInterval = 0;
   let flushTimeout = 0;
-  let finalRepaintTimeout = 0;
+  const nativeInkHandoff: NativeInkHandoffState = {
+    deferredRect: null,
+    scheduledRect: null,
+    strokeGeneration: 0,
+    timeouts: [],
+  };
   const pendingStrokes: OnyxStrokePayload[] = [];
 
   const attach = async () => {
@@ -122,29 +128,23 @@ export const connectOnyxPenBridge = (
           queueStroke(excalidrawAPI, payload, pendingStrokes, options);
         }
       });
-      pointerDownListener = await OnyxPen.addListener(
-        "onyxPointerDown",
-        () => {
-          if (!disposed) {
-            if (flushTimeout) {
-              window.clearTimeout(flushTimeout);
-              flushTimeout = 0;
-            }
-            if (finalRepaintTimeout) {
-              window.clearTimeout(finalRepaintTimeout);
-              finalRepaintTimeout = 0;
-            }
-            excalidrawAPI.updateScene({
-              appState: {
-                openMenu: null,
-                openPopup: null,
-                showToolSettings: false,
-              },
-              captureUpdate: CaptureUpdateAction.NEVER,
-            });
+      pointerDownListener = await OnyxPen.addListener("onyxPointerDown", () => {
+        if (!disposed) {
+          nativeInkHandoff.strokeGeneration++;
+          if (flushTimeout) {
+            window.clearTimeout(flushTimeout);
+            flushTimeout = 0;
           }
-        },
-      );
+          excalidrawAPI.updateScene({
+            appState: {
+              openMenu: null,
+              openPopup: null,
+              showToolSettings: false,
+            },
+            captureUpdate: CaptureUpdateAction.NEVER,
+          });
+        }
+      });
       await OnyxPen.enable();
       window.__ONYX_NATIVE_PEN__ = true;
       excalidrawAPI.updateScene({
@@ -156,7 +156,10 @@ export const connectOnyxPenBridge = (
       });
       updateNativeExcludedRects();
       updateNativeStyle(excalidrawAPI);
-      excludedRectsInterval = window.setInterval(updateNativeExcludedRects, 750);
+      excludedRectsInterval = window.setInterval(
+        updateNativeExcludedRects,
+        750,
+      );
       styleInterval = window.setInterval(
         () => updateNativeStyle(excalidrawAPI),
         250,
@@ -178,12 +181,7 @@ export const connectOnyxPenBridge = (
     }
     flushTimeout = window.setTimeout(() => {
       flushTimeout = 0;
-      finalRepaintTimeout = flushStrokes(
-        excalidrawAPI,
-        pendingStrokes,
-        options,
-        finalRepaintTimeout,
-      );
+      flushStrokes(excalidrawAPI, pendingStrokes, options, nativeInkHandoff);
     }, CONVERT_IDLE_MS);
   };
 
@@ -200,9 +198,7 @@ export const connectOnyxPenBridge = (
     if (flushTimeout) {
       window.clearTimeout(flushTimeout);
     }
-    if (finalRepaintTimeout) {
-      window.clearTimeout(finalRepaintTimeout);
-    }
+    clearNativeInkHandoffTimeouts(nativeInkHandoff);
     listener?.remove();
     pointerDownListener?.remove();
     window.__ONYX_NATIVE_PEN__ = false;
@@ -216,15 +212,15 @@ const flushStrokes = (
   excalidrawAPI: ExcalidrawImperativeAPI,
   pendingStrokes: OnyxStrokePayload[],
   options: OnyxPenBridgeOptions,
-  finalRepaintTimeout: number,
+  nativeInkHandoff: NativeInkHandoffState,
 ) => {
-  if (finalRepaintTimeout) {
-    window.clearTimeout(finalRepaintTimeout);
-  }
-
   const payloads = pendingStrokes.splice(0);
   const newElements: ExcalidrawElement[] = [];
-  const nativeClearRect = getNativeStrokeBounds(payloads);
+  const nativeClearRect = mergeNativeRects(
+    nativeInkHandoff.deferredRect,
+    getNativeStrokeBounds(payloads),
+  );
+  nativeInkHandoff.deferredRect = null;
   let elements: readonly ExcalidrawElement[] =
     excalidrawAPI.getSceneElementsIncludingDeleted();
   let didChange = false;
@@ -256,10 +252,8 @@ const flushStrokes = (
   }
 
   if (!didChange) {
-    OnyxPen.clear(nativeClearRect ?? undefined).catch(() => {
-      // Native plugin is only available inside the Android shell.
-    });
-    return 0;
+    scheduleNativeInkHandoff(nativeClearRect, nativeInkHandoff);
+    return;
   }
 
   const orderedElements = syncInvalidIndices(elements);
@@ -272,22 +266,102 @@ const flushStrokes = (
     captureUpdate: CaptureUpdateAction.IMMEDIATELY,
   });
   options.onElementsChange?.(orderedElements);
-  OnyxPen.clear(nativeClearRect ?? undefined).catch(() => {
-    // Native plugin is only available inside the Android shell.
-  });
-
-  if (!nativeClearRect) {
-    return 0;
-  }
-
-  return window.setTimeout(() => {
-    OnyxPen.repaintWebViewHandwriting(nativeClearRect).catch(() => {
-      // Native plugin is only available inside the Android shell.
-    });
-  }, FINAL_REPAINT_DELAY_MS);
+  scheduleNativeInkHandoff(nativeClearRect, nativeInkHandoff);
 };
 
-const getNativeStrokeBounds = (payloads: OnyxStrokePayload[]) => {
+const scheduleNativeInkHandoff = (
+  nativeClearRect: NativeRect | null,
+  nativeInkHandoff: NativeInkHandoffState,
+) => {
+  if (!nativeClearRect) {
+    return;
+  }
+
+  nativeInkHandoff.scheduledRect = mergeNativeRects(
+    nativeInkHandoff.scheduledRect,
+    nativeClearRect,
+  );
+  const scheduledRect = nativeInkHandoff.scheduledRect;
+  if (!scheduledRect) {
+    return;
+  }
+
+  clearNativeInkHandoffTimeouts(nativeInkHandoff);
+  const scheduledGeneration = nativeInkHandoff.strokeGeneration;
+  const addTimeout = (callback: () => void, delay: number) => {
+    const timeout = window.setTimeout(() => {
+      nativeInkHandoff.timeouts = nativeInkHandoff.timeouts.filter(
+        (candidate) => candidate !== timeout,
+      );
+      callback();
+    }, delay);
+    nativeInkHandoff.timeouts.push(timeout);
+  };
+
+  addTimeout(() => {
+    OnyxPen.repaintWebViewHandwriting(scheduledRect).catch(() => {
+      // Native plugin is only available inside the Android shell.
+    });
+  }, WEBVIEW_RENDER_SETTLE_MS);
+
+  addTimeout(() => {
+    if (nativeInkHandoff.strokeGeneration !== scheduledGeneration) {
+      nativeInkHandoff.deferredRect = mergeNativeRects(
+        nativeInkHandoff.deferredRect,
+        scheduledRect,
+      );
+      if (nativeInkHandoff.scheduledRect === scheduledRect) {
+        nativeInkHandoff.scheduledRect = null;
+      }
+      return;
+    }
+
+    if (nativeInkHandoff.scheduledRect === scheduledRect) {
+      nativeInkHandoff.scheduledRect = null;
+    }
+    OnyxPen.clear(scheduledRect).catch(() => {
+      // Native plugin is only available inside the Android shell.
+    });
+  }, WEBVIEW_RENDER_SETTLE_MS + NATIVE_CLEAR_AFTER_REPAINT_MS);
+
+  addTimeout(() => {
+    OnyxPen.repaintWebViewHandwriting(scheduledRect).catch(() => {
+      // Native plugin is only available inside the Android shell.
+    });
+  }, WEBVIEW_RENDER_SETTLE_MS + NATIVE_CLEAR_AFTER_REPAINT_MS + FINAL_REPAINT_AFTER_CLEAR_MS);
+};
+
+const clearNativeInkHandoffTimeouts = (
+  nativeInkHandoff: NativeInkHandoffState,
+) => {
+  for (const timeout of nativeInkHandoff.timeouts) {
+    window.clearTimeout(timeout);
+  }
+  nativeInkHandoff.timeouts = [];
+};
+
+const mergeNativeRects = (
+  first: NativeRect | null,
+  second: NativeRect | null,
+): NativeRect | null => {
+  if (!first) {
+    return second ? { ...second } : null;
+  }
+  if (!second) {
+    return { ...first };
+  }
+
+  return {
+    left: Math.min(first.left, second.left),
+    top: Math.min(first.top, second.top),
+    right: Math.max(first.right, second.right),
+    bottom: Math.max(first.bottom, second.bottom),
+  };
+};
+
+const getNativeStrokeBounds = (
+  payloads: OnyxStrokePayload[],
+): NativeRect | null => {
   let left = Infinity;
   let top = Infinity;
   let right = -Infinity;
@@ -447,7 +521,10 @@ const eraseElements = (
 
   for (let index = 1; index < scenePoints.length; index++) {
     const segment = lineSegment<GlobalPoint>(
-      pointFrom<GlobalPoint>(scenePoints[index - 1].x, scenePoints[index - 1].y),
+      pointFrom<GlobalPoint>(
+        scenePoints[index - 1].x,
+        scenePoints[index - 1].y,
+      ),
       pointFrom<GlobalPoint>(scenePoints[index].x, scenePoints[index].y),
     );
 
