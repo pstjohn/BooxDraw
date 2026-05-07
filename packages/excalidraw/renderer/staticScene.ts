@@ -241,6 +241,9 @@ const _renderStaticScene = ({
   }
 
   const { renderGrid = true, isExporting } = renderConfig;
+  if (window.__ONYX_FREEZE_EXCALIDRAW_CANVAS__ && !isExporting) {
+    return;
+  }
 
   const [normalizedWidth, normalizedHeight] = getNormalizedCanvasDimensions(
     canvas,
