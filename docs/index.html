@@ -1,4 +1,4 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -42,11 +42,7 @@
         padding: 24px;
         background: var(--bg);
         color: var(--text);
-        font-family:
-          system-ui,
-          -apple-system,
-          BlinkMacSystemFont,
-          "Segoe UI",
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
           sans-serif;
       }
 
@@ -89,12 +85,7 @@
       }
 
       input[name="code"] {
-        font-family:
-          ui-monospace,
-          SFMono-Regular,
-          Menlo,
-          Consolas,
-          monospace;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         font-size: 22px;
         letter-spacing: 0.08em;
         text-transform: uppercase;
@@ -102,6 +93,7 @@
 
       .actions {
         display: flex;
+        flex-wrap: wrap;
         gap: 10px;
         margin-top: 20px;
       }
@@ -125,11 +117,49 @@
         font-weight: 650;
       }
 
+      button.secondary {
+        flex: 1;
+      }
+
       .error {
         min-height: 20px;
         margin-top: 14px;
         color: var(--danger);
         font-size: 14px;
+      }
+
+      .generated {
+        display: none;
+        margin-top: 22px;
+        padding-top: 18px;
+        border-top: 1px solid var(--border);
+      }
+
+      .generated.is-visible {
+        display: grid;
+        gap: 14px;
+      }
+
+      .generated h2 {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      .code-output {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 28px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+      }
+
+      .link-output {
+        display: block;
+        overflow-wrap: anywhere;
+        color: var(--primary);
+      }
+
+      .generated .actions {
+        margin-top: 0;
       }
 
       .note {
@@ -143,7 +173,10 @@
   <body>
     <main>
       <h1>BooxDraw Room Code</h1>
-      <p>Enter the code shown on the tablet to join the live Excalidraw room.</p>
+      <p>
+        Generate a desktop Excalidraw room for the tablet, or enter a tablet
+        code to join an existing room.
+      </p>
 
       <form id="room-form">
         <label>
@@ -160,14 +193,35 @@
 
         <div class="actions">
           <button type="submit">Join Room</button>
+          <button type="button" class="secondary" id="generate-room">
+            Generate Code + URL
+          </button>
         </div>
 
         <div class="error" id="error" role="alert"></div>
       </form>
 
+      <section class="generated" id="generated-room" aria-live="polite">
+        <h2>Desktop room</h2>
+        <div>
+          <label>Tablet code</label>
+          <div class="code-output" id="generated-code"></div>
+        </div>
+        <div>
+          <label>Desktop URL</label>
+          <a class="link-output" id="generated-link" href="#"></a>
+        </div>
+        <div class="actions">
+          <button type="button" id="open-generated-room">
+            Open Excalidraw
+          </button>
+          <button type="button" id="copy-generated-link">Copy URL</button>
+        </div>
+      </section>
+
       <p class="note">
-        Codes use today's date and are deterministic. The room link is
-        generated in this browser; nothing is uploaded by this page.
+        Codes use today's date and are deterministic. URLs point to the public
+        Excalidraw app; this page does not require a forked desktop client.
       </p>
     </main>
 
@@ -181,6 +235,17 @@
       const form = document.querySelector("#room-form");
       const codeInput = form.elements.code;
       const errorEl = document.querySelector("#error");
+      const generateButton = document.querySelector("#generate-room");
+      const generatedRoom = document.querySelector("#generated-room");
+      const generatedCodeEl = document.querySelector("#generated-code");
+      const generatedLinkEl = document.querySelector("#generated-link");
+      const openGeneratedRoomButton = document.querySelector(
+        "#open-generated-room",
+      );
+      const copyGeneratedLinkButton = document.querySelector(
+        "#copy-generated-link",
+      );
+      let generatedLink = "";
 
       const normalizeRoomCode = (code) =>
         code
@@ -209,6 +274,15 @@
         const month = `${date.getMonth() + 1}`.padStart(2, "0");
         const day = `${date.getDate()}`.padStart(2, "0");
         return `${year}-${month}-${day}`;
+      };
+
+      const generateRoomCode = () => {
+        const bytes = new Uint8Array(ROOM_CODE_LENGTH);
+        window.crypto.getRandomValues(bytes);
+
+        return Array.from(bytes, (byte) => ROOM_CODE_ALPHABET[byte & 31]).join(
+          "",
+        );
       };
 
       const bytesToHex = (bytes) =>
@@ -243,6 +317,9 @@
         };
       };
 
+      const getRoomLink = ({ roomId, roomKey }) =>
+        `${EXCALIDRAW_ORIGIN}/#room=${roomId},${roomKey}`;
+
       const joinRoom = async () => {
         const code = normalizeRoomCode(codeInput.value);
         const date = getRoomCodeDate();
@@ -254,7 +331,21 @@
 
         errorEl.textContent = "";
         const { roomId, roomKey } = await deriveRoom(code, date);
-        window.location.href = `${EXCALIDRAW_ORIGIN}/#room=${roomId},${roomKey}`;
+        window.location.href = getRoomLink({ roomId, roomKey });
+      };
+
+      const generateRoom = async () => {
+        const code = generateRoomCode();
+        const date = getRoomCodeDate();
+        const room = await deriveRoom(code, date);
+        generatedLink = getRoomLink(room);
+
+        codeInput.value = formatRoomCode(code);
+        generatedCodeEl.textContent = formatRoomCode(code);
+        generatedLinkEl.textContent = generatedLink;
+        generatedLinkEl.href = generatedLink;
+        generatedRoom.classList.add("is-visible");
+        errorEl.textContent = "";
       };
 
       codeInput.addEventListener("input", () => {
@@ -271,6 +362,36 @@
           console.error(error);
           errorEl.textContent = "Could not create the room link.";
         });
+      });
+
+      generateButton.addEventListener("click", () => {
+        generateRoom().catch((error) => {
+          console.error(error);
+          errorEl.textContent = "Could not generate the room link.";
+        });
+      });
+
+      openGeneratedRoomButton.addEventListener("click", () => {
+        if (generatedLink) {
+          window.open(generatedLink, "_blank", "noopener,noreferrer");
+        }
+      });
+
+      copyGeneratedLinkButton.addEventListener("click", async () => {
+        if (!generatedLink) {
+          return;
+        }
+
+        try {
+          await navigator.clipboard.writeText(generatedLink);
+          copyGeneratedLinkButton.textContent = "Copied";
+          window.setTimeout(() => {
+            copyGeneratedLinkButton.textContent = "Copy URL";
+          }, 1500);
+        } catch (error) {
+          console.error(error);
+          errorEl.textContent = "Could not copy the URL.";
+        }
       });
 
       const initialCode = new URLSearchParams(window.location.search).get(

@@ -498,13 +498,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
     if (existingRoomLinkData) {
       ({ roomId, roomKey } = existingRoomLinkData);
-      if (isNewRoom) {
-        window.history.pushState(
-          {},
-          APP_NAME,
-          getCollaborationLink({ roomId, roomKey }),
-        );
-      }
+      window.history.pushState(
+        {},
+        APP_NAME,
+        getCollaborationLink({ roomId, roomKey }),
+      );
     } else {
       ({ roomId, roomKey } = await generateCollaborationLinkData());
       window.history.pushState(

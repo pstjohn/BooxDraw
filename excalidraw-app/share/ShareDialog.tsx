@@ -25,6 +25,8 @@ import {
   formatRoomCode,
   generateRoomCode,
   getRoomCodeDate,
+  isValidRoomCode,
+  normalizeRoomCode,
 } from "../data/roomCode";
 
 import "./ShareDialog.scss";
@@ -87,6 +89,30 @@ const startCodedRoom = async (
   });
 };
 
+const joinCodedRoom = async (collabAPI: CollabAPI, code: string) => {
+  const normalizedCode = normalizeRoomCode(code);
+
+  if (!isValidRoomCode(normalizedCode)) {
+    throw new Error("Enter a valid 10-character room code.");
+  }
+
+  const roomCode = {
+    code: normalizedCode,
+    date: getRoomCodeDate(),
+  };
+  const roomLinkData = await deriveCollaborationLinkDataFromRoomCode(
+    roomCode.code,
+    roomCode.date,
+  );
+
+  if (collabAPI.isCollaborating()) {
+    collabAPI.stopCollaboration(false);
+  }
+
+  trackEvent("share", "room code join", `ui (${getFrame()})`);
+  await collabAPI.startCollaboration(roomLinkData, { roomCode });
+};
+
 export type ShareDialogProps = {
   collabAPI: CollabAPI | null;
   handleClose: () => void;
@@ -111,6 +137,22 @@ const ActiveRoomDialog = ({
   const ref = useRef<HTMLInputElement>(null);
   const isShareSupported = "share" in navigator;
   const { onCopy, copyStatus } = useCopyStatus();
+  const [isJoinRoomOpen, setIsJoinRoomOpen] = useState(false);
+  const [joinRoomCode, setJoinRoomCode] = useState("");
+  const [joinRoomError, setJoinRoomError] = useState("");
+
+  const joinRoomFromCode = async () => {
+    try {
+      setJoinRoomError("");
+      await joinCodedRoom(collabAPI, joinRoomCode);
+      setJoinRoomCode("");
+      setIsJoinRoomOpen(false);
+    } catch (error) {
+      setJoinRoomError(
+        error instanceof Error ? error.message : "Could not join room.",
+      );
+    }
+  };
 
   const copyRoomLink = async () => {
     try {
@@ -188,14 +230,12 @@ const ActiveRoomDialog = ({
       <QRCode value={activeRoomLink} />
       {activeRoomCode && (
         <div className="ShareDialog__active__roomCode">
-          <div className="ShareDialog__active__roomCode__label">
-            Desktop code
-          </div>
+          <div className="ShareDialog__active__roomCode__label">Room code</div>
           <div className="ShareDialog__active__roomCode__value">
             {formatRoomCode(activeRoomCode.code)}
           </div>
           <div className="ShareDialog__active__roomCode__hint">
-            Open pcstj.com/BooxDraw and enter this code.
+            Open pcstj.com/BooxDraw to enter or generate compatible codes.
           </div>
         </div>
       )}
@@ -228,6 +268,16 @@ const ActiveRoomDialog = ({
         <FilledButton
           size="large"
           variant="outlined"
+          label="Join desktop code"
+          icon={LinkIcon}
+          onClick={() => {
+            setJoinRoomError("");
+            setIsJoinRoomOpen((isOpen) => !isOpen);
+          }}
+        />
+        <FilledButton
+          size="large"
+          variant="outlined"
           color="danger"
           label={t("roomDialog.button_stopSession")}
           icon={playerStopFilledIcon}
@@ -240,6 +290,39 @@ const ActiveRoomDialog = ({
           }}
         />
       </div>
+      {isJoinRoomOpen && (
+        <div className="ShareDialog__roomCodeJoin">
+          <div className="ShareDialog__roomCodeJoin__row">
+            <TextField
+              fullWidth
+              value={joinRoomCode}
+              label="Desktop code"
+              placeholder="ABCDE-12345"
+              onChange={(value) => {
+                setJoinRoomCode(formatRoomCode(value));
+                setJoinRoomError("");
+              }}
+              onKeyDown={(event) => {
+                if (event.key === KEYS.ENTER) {
+                  void joinRoomFromCode();
+                }
+              }}
+            />
+            <FilledButton
+              size="large"
+              label="Join"
+              icon={LinkIcon}
+              disabled={!joinRoomCode}
+              onClick={joinRoomFromCode}
+            />
+          </div>
+          {joinRoomError && (
+            <div className="ShareDialog__roomCodeJoin__error">
+              {joinRoomError}
+            </div>
+          )}
+        </div>
+      )}
     </>
   );
 };
@@ -248,6 +331,23 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
   const { t } = useI18n();
 
   const { collabAPI } = props;
+  const [joinRoomCode, setJoinRoomCode] = useState("");
+  const [joinRoomError, setJoinRoomError] = useState("");
+
+  const joinRoomFromCode = async () => {
+    if (!collabAPI) {
+      return;
+    }
+
+    try {
+      setJoinRoomError("");
+      await joinCodedRoom(collabAPI, joinRoomCode);
+    } catch (error) {
+      setJoinRoomError(
+        error instanceof Error ? error.message : "Could not join room.",
+      );
+    }
+  };
 
   const startCollabJSX = collabAPI ? (
     <>
@@ -279,6 +379,37 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
           icon={LinkIcon}
           onClick={() => collabAPI && startCodedRoom(collabAPI)}
         />
+      </div>
+      <div className="ShareDialog__roomCodeJoin">
+        <div className="ShareDialog__roomCodeJoin__row">
+          <TextField
+            fullWidth
+            value={joinRoomCode}
+            label="Desktop code"
+            placeholder="ABCDE-12345"
+            onChange={(value) => {
+              setJoinRoomCode(formatRoomCode(value));
+              setJoinRoomError("");
+            }}
+            onKeyDown={(event) => {
+              if (event.key === KEYS.ENTER) {
+                void joinRoomFromCode();
+              }
+            }}
+          />
+          <FilledButton
+            size="large"
+            label="Join"
+            icon={LinkIcon}
+            disabled={!joinRoomCode}
+            onClick={joinRoomFromCode}
+          />
+        </div>
+        {joinRoomError && (
+          <div className="ShareDialog__roomCodeJoin__error">
+            {joinRoomError}
+          </div>
+        )}
       </div>
 
       {props.type === "share" && (

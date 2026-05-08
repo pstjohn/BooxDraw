@@ -120,6 +120,27 @@
       }
     }
 
+    &__roomCodeJoin {
+      display: flex;
+      flex-direction: column;
+      gap: 0.375rem;
+      padding: 0.75rem;
+      border: 1px solid var(--dialog-border-color);
+      border-radius: 0.5rem;
+      background: var(--island-bg-color);
+
+      &__row {
+        display: flex;
+        align-items: flex-end;
+        gap: 0.75rem;
+      }
+
+      &__error {
+        color: var(--color-danger);
+        font-size: 0.75rem;
+      }
+    }
+
     &__active {
       &__share {
         display: none !important;
