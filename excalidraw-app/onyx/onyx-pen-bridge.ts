@@ -96,16 +96,10 @@ const CONVERT_IDLE_MS = 500;
 const FLUSH_IDLE_TIMEOUT_MS = 350;
 const MAX_STROKES_PER_FLUSH = 12;
 const STAGED_STROKE_APPLY_MS = 100;
-const THIN_STROKE_WIDTH = 0.45;
-const BOLD_STROKE_WIDTH = 0.8;
-const EXTRA_BOLD_STROKE_WIDTH = 1.35;
-const MIN_ONYX_PRESSURE = 0.08;
-const MAX_ONYX_PRESSURE = 1;
 const MIN_STROKE_POINT_DISTANCE = 0.16;
 const STROKE_SIMPLIFICATION_EPSILON = 0.16;
 const ONYX_FREEDRAW_SMOOTHING = 0.28;
 const ONYX_FREEDRAW_STREAMLINE = 0.12;
-const NATIVE_PRESSURE_PREVIEW_WIDTH_SCALE = 1.4;
 const MAX_POINTS_PER_STROKE = 800;
 const MAX_SIMPLIFICATION_PASSES = 4;
 const CLEAR_REGION_PADDING = 48;
@@ -113,6 +107,46 @@ const WEBVIEW_RENDER_SETTLE_MS = 48;
 const NATIVE_CLEAR_AFTER_REPAINT_MS = 70;
 const FINAL_REPAINT_AFTER_CLEAR_MS = 170;
 const SCENE_RESET_EVENT = "booxdraw:scene-reset";
+
+type OnyxStrokeProfile = {
+  jsStrokeWidth: number;
+  nativePreviewWidth: number;
+  pressureMin: number;
+  pressureMax: number;
+  pressureGamma: number;
+  pressureSensitive: boolean;
+};
+
+const ONYX_STROKE_PROFILES: Record<
+  "thin" | "bold" | "extraBold",
+  OnyxStrokeProfile
+> = {
+  thin: {
+    jsStrokeWidth: 0.45,
+    nativePreviewWidth: 5,
+    pressureMin: 0.5,
+    pressureMax: 0.5,
+    pressureGamma: 1,
+    pressureSensitive: false,
+  },
+  bold: {
+    jsStrokeWidth: 0.62,
+    nativePreviewWidth: 7,
+    pressureMin: 0.32,
+    pressureMax: 0.68,
+    pressureGamma: 0.85,
+    pressureSensitive: false,
+  },
+  extraBold: {
+    jsStrokeWidth: 1.03,
+    nativePreviewWidth: 12,
+    pressureMin: 0.38,
+    pressureMax: 0.78,
+    pressureGamma: 0.85,
+    pressureSensitive: false,
+  },
+};
+
 let lastExcludedRectsSignature = "";
 let lastStyleSignature = "";
 let pendingOnyxSceneUpdateCount = 0;
@@ -1066,29 +1100,26 @@ const getSceneStrokePoints = (
 };
 
 const getOnyxStrokeWidth = (strokeWidth: number) => {
+  return getOnyxStrokeProfile(strokeWidth).jsStrokeWidth;
+};
+
+const getOnyxStrokeProfile = (strokeWidth: number): OnyxStrokeProfile => {
   if (strokeWidth <= 1) {
-    return THIN_STROKE_WIDTH;
+    return ONYX_STROKE_PROFILES.thin;
   }
   if (strokeWidth <= 2) {
-    return BOLD_STROKE_WIDTH;
+    return ONYX_STROKE_PROFILES.bold;
   }
-  return EXTRA_BOLD_STROKE_WIDTH;
+  return ONYX_STROKE_PROFILES.extraBold;
 };
 
 const getNativePreviewStrokeWidth = (
   excalidrawStrokeWidth: number,
   zoomValue: number,
 ) => {
-  const effectiveStrokeWidth = getOnyxStrokeWidth(excalidrawStrokeWidth);
+  const profile = getOnyxStrokeProfile(excalidrawStrokeWidth);
   const zoom = Number.isFinite(zoomValue) && zoomValue > 0 ? zoomValue : 1;
-
-  if (effectiveStrokeWidth <= THIN_STROKE_WIDTH) {
-    return 5 * zoom;
-  }
-  if (effectiveStrokeWidth <= BOLD_STROKE_WIDTH) {
-    return 8 * NATIVE_PRESSURE_PREVIEW_WIDTH_SCALE * zoom;
-  }
-  return 12 * NATIVE_PRESSURE_PREVIEW_WIDTH_SCALE * zoom;
+  return profile.nativePreviewWidth * zoom;
 };
 
 const nativePointToClientPoint = (
@@ -1253,9 +1284,7 @@ const normalizePressures = (
   points: SceneStrokePoint[],
   strokeWidth: number,
 ) => {
-  if (strokeWidth <= THIN_STROKE_WIDTH) {
-    return points.map(() => 0.5);
-  }
+  const profile = getOnyxStrokeProfileFromJsWidth(strokeWidth);
 
   const pressures = points.map((point) =>
     Number.isFinite(point.p) && point.p !== undefined ? point.p : 1,
@@ -1268,11 +1297,24 @@ const normalizePressures = (
 
   return normalized.map((pressure) => {
     const clampedPressure = Math.max(0, Math.min(1, pressure));
+    const curvedPressure = clampedPressure ** profile.pressureGamma;
     return (
-      MIN_ONYX_PRESSURE +
-      clampedPressure * (MAX_ONYX_PRESSURE - MIN_ONYX_PRESSURE)
+      profile.pressureMin +
+      curvedPressure * (profile.pressureMax - profile.pressureMin)
     );
   });
+};
+
+const getOnyxStrokeProfileFromJsWidth = (
+  strokeWidth: number,
+): OnyxStrokeProfile => {
+  if (strokeWidth <= ONYX_STROKE_PROFILES.thin.jsStrokeWidth) {
+    return ONYX_STROKE_PROFILES.thin;
+  }
+  if (strokeWidth <= ONYX_STROKE_PROFILES.bold.jsStrokeWidth) {
+    return ONYX_STROKE_PROFILES.bold;
+  }
+  return ONYX_STROKE_PROFILES.extraBold;
 };
 
 const normalizeStrokeColor = (strokeColor: string) => {
@@ -1291,8 +1333,9 @@ const updateNativeStyle = (excalidrawAPI: ExcalidrawImperativeAPI) => {
     appState.currentItemStrokeWidth,
     appState.zoom.value,
   );
-  const pressureSensitive =
-    getOnyxStrokeWidth(appState.currentItemStrokeWidth) > THIN_STROKE_WIDTH;
+  const pressureSensitive = getOnyxStrokeProfile(
+    appState.currentItemStrokeWidth,
+  ).pressureSensitive;
   const signature = [
     Math.round(strokeWidth * 100) / 100,
     normalizeStrokeColor(appState.currentItemStrokeColor),

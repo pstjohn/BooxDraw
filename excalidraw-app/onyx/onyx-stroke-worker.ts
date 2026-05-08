@@ -51,17 +51,43 @@ type StrokeConversionResponse = {
   error?: string;
 };
 
-const THIN_STROKE_WIDTH = 0.45;
-const BOLD_STROKE_WIDTH = 0.8;
-const EXTRA_BOLD_STROKE_WIDTH = 1.35;
-const MIN_ONYX_PRESSURE = 0.08;
-const MAX_ONYX_PRESSURE = 1;
 const MIN_STROKE_POINT_DISTANCE = 0.16;
 const STROKE_SIMPLIFICATION_EPSILON = 0.16;
 const ONYX_FREEDRAW_SMOOTHING = 0.28;
 const ONYX_FREEDRAW_STREAMLINE = 0.12;
 const MAX_POINTS_PER_STROKE = 800;
 const MAX_SIMPLIFICATION_PASSES = 4;
+
+type OnyxStrokeProfile = {
+  jsStrokeWidth: number;
+  pressureMin: number;
+  pressureMax: number;
+  pressureGamma: number;
+};
+
+const ONYX_STROKE_PROFILES: Record<
+  "thin" | "bold" | "extraBold",
+  OnyxStrokeProfile
+> = {
+  thin: {
+    jsStrokeWidth: 0.45,
+    pressureMin: 0.5,
+    pressureMax: 0.5,
+    pressureGamma: 1,
+  },
+  bold: {
+    jsStrokeWidth: 0.62,
+    pressureMin: 0.32,
+    pressureMax: 0.68,
+    pressureGamma: 0.85,
+  },
+  extraBold: {
+    jsStrokeWidth: 1.03,
+    pressureMin: 0.38,
+    pressureMax: 0.78,
+    pressureGamma: 0.85,
+  },
+};
 
 self.onmessage = (event: MessageEvent<StrokeConversionRequest>) => {
   const { id, payloads, appState, viewportWidth, viewportHeight } = event.data;
@@ -189,13 +215,17 @@ const viewportCoordsToSceneCoords = (
 };
 
 const getOnyxStrokeWidth = (strokeWidth: number) => {
+  return getOnyxStrokeProfile(strokeWidth).jsStrokeWidth;
+};
+
+const getOnyxStrokeProfile = (strokeWidth: number): OnyxStrokeProfile => {
   if (strokeWidth <= 1) {
-    return THIN_STROKE_WIDTH;
+    return ONYX_STROKE_PROFILES.thin;
   }
   if (strokeWidth <= 2) {
-    return BOLD_STROKE_WIDTH;
+    return ONYX_STROKE_PROFILES.bold;
   }
-  return EXTRA_BOLD_STROKE_WIDTH;
+  return ONYX_STROKE_PROFILES.extraBold;
 };
 
 const nativePointToClientPoint = (
@@ -362,9 +392,7 @@ const normalizePressures = (
   points: SceneStrokePoint[],
   strokeWidth: number,
 ) => {
-  if (strokeWidth <= THIN_STROKE_WIDTH) {
-    return points.map(() => 0.5);
-  }
+  const profile = getOnyxStrokeProfileFromJsWidth(strokeWidth);
 
   const pressures = points.map((point) =>
     Number.isFinite(point.p) && point.p !== undefined ? point.p : 1,
@@ -377,11 +405,24 @@ const normalizePressures = (
 
   return normalized.map((pressure) => {
     const clampedPressure = Math.max(0, Math.min(1, pressure));
+    const curvedPressure = clampedPressure ** profile.pressureGamma;
     return (
-      MIN_ONYX_PRESSURE +
-      clampedPressure * (MAX_ONYX_PRESSURE - MIN_ONYX_PRESSURE)
+      profile.pressureMin +
+      curvedPressure * (profile.pressureMax - profile.pressureMin)
     );
   });
+};
+
+const getOnyxStrokeProfileFromJsWidth = (
+  strokeWidth: number,
+): OnyxStrokeProfile => {
+  if (strokeWidth <= ONYX_STROKE_PROFILES.thin.jsStrokeWidth) {
+    return ONYX_STROKE_PROFILES.thin;
+  }
+  if (strokeWidth <= ONYX_STROKE_PROFILES.bold.jsStrokeWidth) {
+    return ONYX_STROKE_PROFILES.bold;
+  }
+  return ONYX_STROKE_PROFILES.extraBold;
 };
 
 const normalizeStrokeColor = (strokeColor: string) => {
