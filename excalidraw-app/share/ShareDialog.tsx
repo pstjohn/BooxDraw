@@ -140,6 +140,7 @@ const ActiveRoomDialog = ({
   const [isJoinRoomOpen, setIsJoinRoomOpen] = useState(false);
   const [joinRoomCode, setJoinRoomCode] = useState("");
   const [joinRoomError, setJoinRoomError] = useState("");
+  const joinRoomInputRef = useRef<HTMLInputElement>(null);
 
   const joinRoomFromCode = async () => {
     try {
@@ -253,47 +254,11 @@ const ActiveRoomDialog = ({
         <p>{t("roomDialog.desc_exitSession")}</p>
       </div>
 
-      <div className="ShareDialog__active__actions">
-        {activeRoomCode && (
-          <FilledButton
-            size="large"
-            variant="outlined"
-            label="Reset canvas + new code"
-            icon={LinkIcon}
-            onClick={() => {
-              startCodedRoom(collabAPI, { resetCanvas: true });
-            }}
-          />
-        )}
-        <FilledButton
-          size="large"
-          variant="outlined"
-          label="Join desktop code"
-          icon={LinkIcon}
-          onClick={() => {
-            setJoinRoomError("");
-            setIsJoinRoomOpen((isOpen) => !isOpen);
-          }}
-        />
-        <FilledButton
-          size="large"
-          variant="outlined"
-          color="danger"
-          label={t("roomDialog.button_stopSession")}
-          icon={playerStopFilledIcon}
-          onClick={() => {
-            trackEvent("share", "room closed");
-            collabAPI.stopCollaboration();
-            if (!collabAPI.isCollaborating()) {
-              handleClose();
-            }
-          }}
-        />
-      </div>
       {isJoinRoomOpen && (
         <div className="ShareDialog__roomCodeJoin">
           <div className="ShareDialog__roomCodeJoin__row">
             <TextField
+              ref={joinRoomInputRef}
               fullWidth
               value={joinRoomCode}
               label="Desktop code"
@@ -323,6 +288,52 @@ const ActiveRoomDialog = ({
           )}
         </div>
       )}
+      <div className="ShareDialog__active__actions">
+        {activeRoomCode && (
+          <FilledButton
+            size="large"
+            variant="outlined"
+            label="Reset + new code"
+            icon={LinkIcon}
+            onClick={() => {
+              startCodedRoom(collabAPI, { resetCanvas: true });
+            }}
+          />
+        )}
+        <FilledButton
+          size="large"
+          variant="outlined"
+          label={isJoinRoomOpen ? "Hide code" : "Join desktop"}
+          icon={LinkIcon}
+          onClick={() => {
+            setJoinRoomError("");
+            const shouldOpen = !isJoinRoomOpen;
+            setIsJoinRoomOpen(shouldOpen);
+            if (shouldOpen) {
+              window.requestAnimationFrame(() => {
+                joinRoomInputRef.current?.focus();
+                joinRoomInputRef.current?.scrollIntoView({
+                  block: "center",
+                });
+              });
+            }
+          }}
+        />
+        <FilledButton
+          size="large"
+          variant="outlined"
+          color="danger"
+          label={t("roomDialog.button_stopSession")}
+          icon={playerStopFilledIcon}
+          onClick={() => {
+            trackEvent("share", "room closed");
+            collabAPI.stopCollaboration();
+            if (!collabAPI.isCollaborating()) {
+              handleClose();
+            }
+          }}
+        />
+      </div>
     </>
   );
 };
